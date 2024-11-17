@@ -24,6 +24,11 @@ services:
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
       - NEXTAUTH_URL=http://localhost:3000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    working_dir: /app
+    command: ["npm", "run", "dev"]
     depends_on:
       - backend
 
