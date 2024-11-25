@@ -1,18 +1,48 @@
 import React, { useState, useEffect } from "react";
 
-const Gameboard: React.FC = () => {
-  const initialBoard = Array.from({ length: 8 }, (_, row) =>
-    Array.from({ length: 8 }, (_, col) => (row === 1 ? "P" : row === 6 ? "p" : null))
-  );
+const pieceSymbols: Record<string, string> = {
+  P: "♙",
+  p: "♟",
+  R: "♖",
+  r: "♜",
+  N: "♘",
+  n: "♞",
+  B: "♗",
+  b: "♝",
+  Q: "♕",
+  q: "♛",
+  K: "♔",
+  k: "♚",
+};
 
-  const [mainBoard, setMainBoard] = useState(initialBoard);
-  const [secondaryBoard, setSecondaryBoard] = useState(initialBoard);
+const createInitialBoard = (isWhiteBottom: boolean): Array<Array<string | null>> => {
+  const emptyRow: Array<string | null> = Array(8).fill(null);
+
+  const whitePieces = ["R", "N", "B", "Q", "K", "B", "N", "R"];
+  const blackPieces = whitePieces.map((p) => p.toLowerCase());
+  const whitePawns = "P";
+  const blackPawns = "p";
+
+  const board = [
+    isWhiteBottom ? whitePieces : blackPieces, // Top row
+    Array(8).fill(isWhiteBottom ? whitePawns : blackPawns), // Row 1
+    ...Array(4).fill(emptyRow), // Rows 2-5
+    Array(8).fill(isWhiteBottom ? blackPawns : whitePawns), // Row 6
+    isWhiteBottom ? blackPieces : whitePieces, // Bottom row
+  ];
+
+  return isWhiteBottom ? board : board.reverse();
+};
+
+const Gameboard: React.FC = () => {
+  const [mainBoard, setMainBoard] = useState(createInitialBoard(false));
+  const [secondaryBoard, setSecondaryBoard] = useState(createInitialBoard(false));
   const [activeBoard, setActiveBoard] = useState<"main" | "secondary">("main");
   const [selectedSquare, setSelectedSquare] = useState<[number, number] | null>(null);
 
   const resetBoard = () => {
-    setMainBoard(initialBoard);
-    setSecondaryBoard(initialBoard);
+    setMainBoard(createInitialBoard(false));
+    setSecondaryBoard(createInitialBoard(false));
     setSelectedSquare(null);
   };
 
@@ -63,7 +93,7 @@ const Gameboard: React.FC = () => {
     secondary: { light: "bg-[#d9e6f0]", dark: "bg-[#637db5]" },
   };
 
-  const getBoardState = (board: typeof mainBoard, colors: { light: string; dark: string }) =>
+  const getBoardState = (board: Array<Array<string | null>>, colors: { light: string; dark: string }) =>
     board.map((row, rowIndex) =>
       row.map((piece, colIndex) => {
         const isBlack = isBlackSquare(rowIndex, colIndex);
@@ -77,7 +107,7 @@ const Gameboard: React.FC = () => {
               isBlack ? colors.dark : colors.light
             } ${isSelected ? "border-4 border-yellow-400" : ""}`}
           >
-            <span className="text-xl font-bold leading-none">{piece && (piece === "P" ? "♙" : "♟")}</span>
+            <span className="text-2xl font-bold leading-none">{piece ? pieceSymbols[piece] : null}</span>
           </div>
         );
       })
@@ -85,9 +115,11 @@ const Gameboard: React.FC = () => {
 
   return (
     <div className="flex flex-col items-center">
-      <h2 className="text-2xl font-bold mb-4">{activeBoard === "main" ? "Main Board" : "Secondary Board"}</h2>
+      <h2 className="text-2xl font-bold mb-4 text-gray-800">{activeBoard === "main" ? "Main Board" : "Secondary Board"}</h2>
 
+      {/* Board Container */}
       <div className="relative w-[400px] h-[400px]">
+        {/* Bottom Board */}
         <div
           className="absolute inset-0 grid grid-cols-8 shadow-lg"
           style={{
@@ -101,6 +133,7 @@ const Gameboard: React.FC = () => {
           )}
         </div>
 
+        {/* Top Board */}
         <div
           className="absolute inset-0 grid grid-cols-8"
           style={{
@@ -114,10 +147,10 @@ const Gameboard: React.FC = () => {
         </div>
       </div>
 
-      <p className="text-lg mt-4">Press Spacebar to swap boards</p>
+      <p className="text-lg text-gray-600 mt-4">Press Spacebar to swap boards</p>
       <button
         onClick={resetBoard}
-        className="px-4 py-2 bg-gray-600 text-white font-bold rounded hover:bg-gray-500 mt-4"
+        className="px-4 py-2 bg-blue-600 text-white font-bold rounded hover:bg-blue-700 mt-4"
       >
         Reset Both Boards
       </button>
