@@ -23,13 +23,15 @@ const createInitialBoard = (isWhiteBottom: boolean): Array<Array<string | null>>
   const whitePawns = "P";
   const blackPawns = "p";
 
-  return [
+  const board = [
     isWhiteBottom ? blackPieces : whitePieces, // Top row
     Array(8).fill(isWhiteBottom ? blackPawns : whitePawns), // Row 1
     ...Array(4).fill(emptyRow), // Rows 2-5
     Array(8).fill(isWhiteBottom ? whitePawns : blackPawns), // Row 6
     isWhiteBottom ? whitePieces : blackPieces, // Bottom row
   ];
+
+  return board;
 };
 
 const Gameboard: React.FC = () => {
@@ -37,11 +39,16 @@ const Gameboard: React.FC = () => {
   const [secondaryBoard, setSecondaryBoard] = useState(createInitialBoard(true));
   const [activeBoard, setActiveBoard] = useState<"main" | "secondary">("main");
   const [selectedSquare, setSelectedSquare] = useState<[number, number] | null>(null);
+  const [turn, setTurn] = useState<"White" | "Black">("White");
+  const [turnCount, setTurnCount] = useState(0);
 
   const resetBoard = () => {
     setMainBoard(createInitialBoard(true));
     setSecondaryBoard(createInitialBoard(true));
     setSelectedSquare(null);
+    setTurn("White");
+    setTurnCount(0);
+    setActiveBoard("main");
   };
 
   const isBlackSquare = (row: number, col: number) => (row + col) % 2 === 1;
@@ -49,20 +56,26 @@ const Gameboard: React.FC = () => {
   const handleSquareClick = (row: number, col: number) => {
     const board = activeBoard === "main" ? mainBoard : secondaryBoard;
     const setBoard = activeBoard === "main" ? setMainBoard : setSecondaryBoard;
-  
+
     if (selectedSquare) {
       const [fromRow, fromCol] = selectedSquare;
+
+      // Cancel move if clicking on the same square
+      if (fromRow === row && fromCol === col) {
+        setSelectedSquare(null);
+        return;
+      }
+
       const piece = board[fromRow][fromCol];
-  
       if (piece) {
         const targetPiece = board[row][col];
         const newBoard = board.map((r, i) =>
           r.map((c, j) => (i === row && j === col ? piece : i === fromRow && j === fromCol ? null : c))
         );
-  
+
         setBoard(newBoard);
         setSelectedSquare(null);
-  
+
         // Main Board Logic: Remove the corresponding piece from the secondary board
         if (activeBoard === "main" && targetPiece) {
           setSecondaryBoard((prevBoard) =>
@@ -71,6 +84,18 @@ const Gameboard: React.FC = () => {
             )
           );
         }
+
+        // Automatically toggle to the other board after a move
+        toggleBoard();
+
+        setTurnCount((prevCount) => {
+          const newCount = prevCount + 1;
+          if (newCount >= 2) {
+            setTurn((prevTurn) => (prevTurn === "White" ? "Black" : "White"));
+            return 0; // Reset turn count
+          }
+          return newCount;
+        });
       }
     } else if (board[row][col]) {
       setSelectedSquare([row, col]);
@@ -113,7 +138,7 @@ const Gameboard: React.FC = () => {
             onClick={() => handleSquareClick(rowIndex, colIndex)}
             className={`w-[50px] h-[50px] flex items-center justify-center ${
               isBlack ? colors.dark : colors.light
-            } ${isSelected ? "border-4 border-yellow-400" : ""}`}
+            } ${isSelected ? "bg-red-300" : ""}`}
           >
             {piece && (
               <span
@@ -128,10 +153,14 @@ const Gameboard: React.FC = () => {
         );
       })
     );
+  
 
   return (
     <div className="flex flex-col items-center">
-      <h2 className="text-2xl font-bold mb-4 text-gray-800">{activeBoard === "main" ? "Main Board" : "Secondary Board"}</h2>
+      <h2 className="text-2xl font-bold mb-4 text-gray-600">
+        {activeBoard === "main" ? "Main Board" : "Secondary Board"}
+      </h2>
+      <p className="text-lg font-semibold mb-2">Turn: {turn}</p>
 
       {/* Board Container */}
       <div className="relative w-[400px] h-[400px]">
