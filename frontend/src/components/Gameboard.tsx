@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from "react";
 
 const pieceSymbols: Record<string, string> = {
-  P: "♙",
+  P: "♟",
   p: "♟",
-  R: "♖",
+  R: "♜",
   r: "♜",
-  N: "♘",
+  N: "♞",
   n: "♞",
-  B: "♗",
+  B: "♝",
   b: "♝",
-  Q: "♕",
+  Q: "♛",
   q: "♛",
-  K: "♔",
+  K: "♚",
   k: "♚",
 };
 
@@ -23,26 +23,24 @@ const createInitialBoard = (isWhiteBottom: boolean): Array<Array<string | null>>
   const whitePawns = "P";
   const blackPawns = "p";
 
-  const board = [
-    isWhiteBottom ? whitePieces : blackPieces, // Top row
-    Array(8).fill(isWhiteBottom ? whitePawns : blackPawns), // Row 1
+  return [
+    isWhiteBottom ? blackPieces : whitePieces, // Top row
+    Array(8).fill(isWhiteBottom ? blackPawns : whitePawns), // Row 1
     ...Array(4).fill(emptyRow), // Rows 2-5
-    Array(8).fill(isWhiteBottom ? blackPawns : whitePawns), // Row 6
-    isWhiteBottom ? blackPieces : whitePieces, // Bottom row
+    Array(8).fill(isWhiteBottom ? whitePawns : blackPawns), // Row 6
+    isWhiteBottom ? whitePieces : blackPieces, // Bottom row
   ];
-
-  return isWhiteBottom ? board : board.reverse();
 };
 
 const Gameboard: React.FC = () => {
-  const [mainBoard, setMainBoard] = useState(createInitialBoard(false));
-  const [secondaryBoard, setSecondaryBoard] = useState(createInitialBoard(false));
+  const [mainBoard, setMainBoard] = useState(createInitialBoard(true));
+  const [secondaryBoard, setSecondaryBoard] = useState(createInitialBoard(true));
   const [activeBoard, setActiveBoard] = useState<"main" | "secondary">("main");
   const [selectedSquare, setSelectedSquare] = useState<[number, number] | null>(null);
 
   const resetBoard = () => {
-    setMainBoard(createInitialBoard(false));
-    setSecondaryBoard(createInitialBoard(false));
+    setMainBoard(createInitialBoard(true));
+    setSecondaryBoard(createInitialBoard(true));
     setSelectedSquare(null);
   };
 
@@ -51,18 +49,28 @@ const Gameboard: React.FC = () => {
   const handleSquareClick = (row: number, col: number) => {
     const board = activeBoard === "main" ? mainBoard : secondaryBoard;
     const setBoard = activeBoard === "main" ? setMainBoard : setSecondaryBoard;
-
+  
     if (selectedSquare) {
       const [fromRow, fromCol] = selectedSquare;
       const piece = board[fromRow][fromCol];
-
+  
       if (piece) {
+        const targetPiece = board[row][col];
         const newBoard = board.map((r, i) =>
           r.map((c, j) => (i === row && j === col ? piece : i === fromRow && j === fromCol ? null : c))
         );
-
+  
         setBoard(newBoard);
         setSelectedSquare(null);
+  
+        // Main Board Logic: Remove the corresponding piece from the secondary board
+        if (activeBoard === "main" && targetPiece) {
+          setSecondaryBoard((prevBoard) =>
+            prevBoard.map((r, i) =>
+              r.map((c, j) => (i === row && j === col ? null : c))
+            )
+          );
+        }
       }
     } else if (board[row][col]) {
       setSelectedSquare([row, col]);
@@ -98,7 +106,7 @@ const Gameboard: React.FC = () => {
       row.map((piece, colIndex) => {
         const isBlack = isBlackSquare(rowIndex, colIndex);
         const isSelected = selectedSquare?.[0] === rowIndex && selectedSquare?.[1] === colIndex;
-
+  
         return (
           <div
             key={`square-${rowIndex}-${colIndex}`}
@@ -107,7 +115,15 @@ const Gameboard: React.FC = () => {
               isBlack ? colors.dark : colors.light
             } ${isSelected ? "border-4 border-yellow-400" : ""}`}
           >
-            <span className="text-2xl font-bold leading-none">{piece ? pieceSymbols[piece] : null}</span>
+            {piece && (
+              <span
+                className={`text-2xl font-bold leading-none ${
+                  piece === piece.toUpperCase() ? "text-white" : "text-black"
+                }`}
+              >
+                {pieceSymbols[piece]}
+              </span>
+            )}
           </div>
         );
       })
