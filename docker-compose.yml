@@ -2,7 +2,7 @@ services:
   backend:
     build: ./backend
     ports:
-      - "5001:5000"
+      - "5001:5001"
     environment:
       - MONGO_URI=mongodb://mongo:27017/chess
     depends_on:

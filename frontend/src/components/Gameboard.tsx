@@ -135,19 +135,14 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
         setBoard(newBoard);
   
         if (activeBoard === "main" && targetPiece) {
-          setSecondaryBoard((prevBoard) => {
-            const newSecondaryBoard = [...prevBoard];
-            for (let i = 0; i < 8; i++) {
-              for (let j = 0; j < 8; j++) {
-                if (newSecondaryBoard[i][j] === targetPiece) {
-                  newSecondaryBoard[i][j] = null;
-                  break;
-                }
-              }
-            }
-            return newSecondaryBoard;
-          });
+          const targetPieceID = targetPiece;
+          setSecondaryBoard((prevBoard) =>
+            prevBoard.map((row) =>
+              row.map((piece) => (piece === targetPieceID ? null : piece))
+            )
+          );
         }
+        
   
         let moveDescription = `${piece} moved from ${String.fromCharCode(97 + fromCol)}${8 - fromRow} to ${String.fromCharCode(97 + col)}${8 - row} on ${activeBoard} board`;
   

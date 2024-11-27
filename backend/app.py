@@ -17,16 +17,16 @@ games_collection = db.games
 
 def create_initial_board(is_white_bottom=True):
     empty_row = [None] * 8
-    white_pieces = ["R", "N", "B", "Q", "K", "B", "N", "R"]
+    white_pieces = [f"{piece}{i+1}" for i, piece in enumerate(["R", "N", "B", "Q", "K", "B", "N", "R"])]
     black_pieces = [p.lower() for p in white_pieces]
-    white_pawns = "P"
-    black_pawns = "p"
+    white_pawns = [f"P{i+1}" for i in range(8)]
+    black_pawns = [f"p{i+1}" for i in range(8)]
 
     return [
         black_pieces if is_white_bottom else white_pieces,
-        [black_pawns] * 8 if is_white_bottom else [white_pawns] * 8,
+        black_pawns if is_white_bottom else white_pawns,
         *[empty_row.copy() for _ in range(4)],
-        [white_pawns] * 8 if is_white_bottom else [black_pawns] * 8,
+        white_pawns if is_white_bottom else black_pawns,
         white_pieces if is_white_bottom else black_pieces,
     ]
 
@@ -221,4 +221,4 @@ def on_finish_game(data):
 
 
 if __name__ == "__main__":
-    socketio.run(app, host="0.0.0.0", port=5000, allow_unsafe_werkzeug=True)
+    socketio.run(app, host="0.0.0.0", port=5001, allow_unsafe_werkzeug=True)
