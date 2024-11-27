@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import ReturnToMainMenu from "../components/ReturnToMainMenu";
 
 interface Game {
   room: string;
@@ -36,7 +37,7 @@ const HistoryPage: React.FC = () => {
   }
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
+    <div className="p-6 max-w-4xl mx-auto bg-transparent">
       <h1 className="text-3xl font-bold text-center mb-6">Games History</h1>
       <table className="w-full border-collapse border border-gray-300">
         <thead>
@@ -50,11 +51,11 @@ const HistoryPage: React.FC = () => {
         <tbody>
           {games.map((game, index) => (
             <tr key={index}>
-              <td className="border border-gray-300 p-2 text-center">{game.room}</td>
+              <td className="border border-gray-300 p-2 text-center">{game.room === "local" ? "Local Game" : game.room}</td>
               <td className="border border-gray-300 p-2 text-center">{game.winner}</td>
               <td className="border border-gray-300 p-2 text-center">{game.board}</td>
               <td className="border border-gray-300 p-2">
-                <ul className="list-disc pl-4">
+                <ul className="list-decimal pl-4">
                   {game.moves.map((move, moveIndex) => (
                     <li key={moveIndex}>{move}</li>
                   ))}
@@ -64,6 +65,7 @@ const HistoryPage: React.FC = () => {
           ))}
         </tbody>
       </table>
+      <ReturnToMainMenu />
     </div>
   );
 };

@@ -6,7 +6,7 @@ import os
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
-app.config["SECRET_KEY"] = "your_secret_key"
+app.config["SECRET_KEY"] = "lalalalala"
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # MongoDB setup
@@ -35,6 +35,17 @@ def create_initial_board(is_white_bottom=True):
 def get_all_games():
     games = list(games_collection.find({}, {"_id": 0}))
     return jsonify(games), 200
+
+
+# Route: Delete all games data, NOT FOR PRODUCTION
+@app.route("/api/delete_all_games", methods=["POST"])
+def delete_all_games():
+    result = games_collection.delete_many({})
+
+    if result.deleted_count > 0:
+        return jsonify({"message": f"{result.deleted_count} games deleted successfully"}), 200
+    else:
+        return jsonify({"message": "No games found to delete"}), 404
 
 
 # Route: Save game data
@@ -140,7 +151,6 @@ def on_join(data):
             "turn": "White",
             "moves": [],
         }
-        games_collection.insert_one({"room": room, **game_state})
 
     emit("game_state", game_state, room=room)
     emit("player_joined", {"username": username}, room=room)
@@ -170,10 +180,16 @@ def on_move(data):
     if not room or not board_type or not board or not move:
         return
 
-    if board_type == "main":
-        update_field = {"mainBoard": board}
-    else:
-        update_field = {"secondaryBoard": board}
+    if isinstance(move, dict):
+        from_pos = f"{chr(97 + move['from'][1])}{8 - move['from'][0]}"
+        to_pos = f"{chr(97 + move['to'][1])}{8 - move['to'][0]}"
+        move = f"Moved from {from_pos} to {to_pos}"
+
+    update_field = {
+        "mainBoard": board if board_type == "main" else None,
+        "secondaryBoard": board if board_type == "secondary" else None,
+    }
+    update_field = {k: v for k, v in update_field.items() if v is not None}
 
     games_collection.update_one(
         {"room": room},

@@ -21,26 +21,27 @@ const pieceSymbols: Record<string, string> = {
   k: "♚",
 };
 
-const createInitialBoard = (): Array<Array<string | null>> => {
+const createInitialBoard = (isWhiteBottom: boolean): Array<Array<string | null>> => {
   const emptyRow: Array<string | null> = Array(8).fill(null);
 
-  const whitePieces = ["R1", "N1", "B1", "Q1", "K1", "B2", "N2", "R2"];
+  const whitePieces = ["R", "N", "B", "Q", "K", "B", "N", "R"];
   const blackPieces = whitePieces.map((p) => p.toLowerCase());
-  const whitePawns = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"];
-  const blackPawns = whitePawns.map((p) => p.toLowerCase());
+  const whitePawns = Array.from({ length: 8 }, (_, index) => `P${index + 1}`);
+  const blackPawns = Array.from({ length: 8 }, (_, index) => `p${index + 1}`);
 
   return [
-    blackPieces,
-    blackPawns,
-    ...Array(4).fill(emptyRow),
-    whitePawns,
-    whitePieces,
+    isWhiteBottom ? blackPieces : whitePieces, // Top row
+    isWhiteBottom ? blackPawns : whitePawns, // Row 1
+    ...Array(4).fill(emptyRow), // Rows 2-5
+    isWhiteBottom ? whitePawns : blackPawns, // Row 6
+    isWhiteBottom ? whitePieces : blackPieces, // Bottom row
   ];
 };
 
+
 const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
-  const [mainBoard, setMainBoard] = useState(createInitialBoard());
-  const [secondaryBoard, setSecondaryBoard] = useState(createInitialBoard());
+  const [mainBoard, setMainBoard] = useState(createInitialBoard(true));
+  const [secondaryBoard, setSecondaryBoard] = useState(createInitialBoard(true));
   const [activeBoard, setActiveBoard] = useState<"main" | "secondary">("main");
   const [selectedSquare, setSelectedSquare] = useState<[number, number] | null>(null);
   const [turn, setTurn] = useState<"White" | "Black">("White");
@@ -83,7 +84,7 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
   }, [username, room]);
 
   const resetBoard = async () => {
-    const initialBoard = createInitialBoard();
+    const initialBoard = createInitialBoard(true);
     setMainBoard(initialBoard);
     setSecondaryBoard(initialBoard);
     setSelectedSquare(null);
@@ -116,25 +117,30 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
       }
   
       const piece = board[fromRow][fromCol];
+      const targetPiece = board[row][col];
+  
       if (piece) {
-        const targetPiece = board[row][col];
         const newBoard = board.map((r, i) =>
-          r.map((c, j) => (i === row && j === col ? piece : i === fromRow && j === fromCol ? null : c))
+          r.map((c, j) => {
+            if (i === row && j === col) {
+              return piece;
+            }
+            if (i === fromRow && j === fromCol) {
+              return null;
+            }
+            return c;
+          })
         );
   
         setBoard(newBoard);
   
-        const moveDescription = `${piece} moved from ${String.fromCharCode(97 + fromCol)}${8 - fromRow} to ${String.fromCharCode(97 + col)}${8 - row} on ${activeBoard} board`;
-        setMoveHistory((prevHistory) => [...prevHistory, moveDescription]);
-  
         if (activeBoard === "main" && targetPiece) {
           setSecondaryBoard((prevBoard) => {
             const newSecondaryBoard = [...prevBoard];
-            // Loop through the rows and columns to find the target piece in the secondary board
             for (let i = 0; i < 8; i++) {
               for (let j = 0; j < 8; j++) {
                 if (newSecondaryBoard[i][j] === targetPiece) {
-                  newSecondaryBoard[i][j] = null; // Remove the piece from the secondary board
+                  newSecondaryBoard[i][j] = null;
                   break;
                 }
               }
@@ -142,6 +148,14 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
             return newSecondaryBoard;
           });
         }
+  
+        let moveDescription = `${piece} moved from ${String.fromCharCode(97 + fromCol)}${8 - fromRow} to ${String.fromCharCode(97 + col)}${8 - row} on ${activeBoard} board`;
+  
+        if (targetPiece) {
+          moveDescription = `${piece} captured ${targetPiece} at ${String.fromCharCode(97 + col)}${8 - row} on ${activeBoard} board`;
+        }
+  
+        setMoveHistory((prevHistory) => [...prevHistory, moveDescription]);
   
         setSelectedSquare(null);
   
@@ -167,30 +181,51 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
     }
   };
   
-
+  
+  
   const toggleBoard = () => {
     setActiveBoard((prev) => (prev === "main" ? "secondary" : "main"));
     setSelectedSquare(null);
   };
 
-  const handleFinishGame = async () => {
+  const handleFinishGame = () => {
     if (winner && checkmateBoard) {
-      const gameData = {
-        room,
-        winner,
-        board: checkmateBoard,
-        moves: moveHistory,
-      };
-
-      await fetch("http://localhost:5001/api/games", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(gameData),
-      });
-
-      setGameFinished(true);
-      setShowFinishModal(false);
-      alert(`Game finished! Winner: ${winner} on ${checkmateBoard} board`);
+      const gameRoom = room || "local";
+      if (socket) {
+        socket.emit("finish_game", {
+          room: gameRoom,
+          winner,
+          board: checkmateBoard,
+        });
+  
+        setShowFinishModal(false);
+        setGameFinished(true);
+        resetBoard();
+  
+        const gameData = {
+          room: gameRoom,
+          winner,
+          board: checkmateBoard,
+          moves: moveHistory,
+        };
+  
+        if (winner) {
+          fetch("http://localhost:5001/api/games", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(gameData),
+          })
+            .then((response) => response.json())
+            .then((data) => {
+              console.log("Game saved to database:", data);
+            })
+            .catch((error) => {
+              console.error("Error saving game to database:", error);
+            });
+        }
+      }
     }
   };
 
@@ -229,7 +264,7 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
 
   return (
     <div className="flex flex-col items-center">
-      <h2 className="text-2xl font-bold mb-4 text-gray-800">Room: {room}</h2>
+      <h2 className="text-2xl font-bold mb-4 text-gray-600">Room: {room}</h2>
       <p className="text-lg font-semibold mb-2">Turn: {turn}</p>
 
       <div className="relative w-[400px] h-[400px]">

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import Gameboard from "../components/Gameboard";
+import ReturnToMainMenu from "../components/ReturnToMainMenu";
 import { v4 as uuidv4 } from "uuid";
 
 export default function MultiplayerSetup() {
@@ -20,7 +21,12 @@ export default function MultiplayerSetup() {
   };
 
   if (gameStarted) {
-    return <Gameboard username={username} room={room} />;
+    return (
+      <div className="flex flex-col items-center justify-center h-screen">
+        <Gameboard username={username} room={room} />
+        <ReturnToMainMenu />
+      </div>
+    );
   }
 
   return (
@@ -48,6 +54,7 @@ export default function MultiplayerSetup() {
           {room ? "Join Game" : "Create Game"}
         </button>
       </div>
+      <ReturnToMainMenu />
     </div>
   );
 }
