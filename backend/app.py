@@ -3,6 +3,7 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, join_room, leave_room, emit
 from pymongo import MongoClient
 import os
+from bson import ObjectId
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -17,7 +18,7 @@ games_collection = db.games
 
 def create_initial_board(is_white_bottom=True):
     empty_row = [None] * 8
-    white_pieces = [f"{piece}{i+1}" for i, piece in enumerate(["R", "N", "B", "Q", "K", "B", "N", "R"])]
+    white_pieces = ["R", "N", "B", "Q", "K", "B", "N", "R"]
     black_pieces = [p.lower() for p in white_pieces]
     white_pawns = [f"P{i+1}" for i in range(8)]
     black_pawns = [f"p{i+1}" for i in range(8)]
@@ -29,6 +30,11 @@ def create_initial_board(is_white_bottom=True):
         white_pawns if is_white_bottom else black_pawns,
         white_pieces if is_white_bottom else black_pieces,
     ]
+
+def serialize_game_state(game_state):
+    if "_id" in game_state:
+        game_state["_id"] = str(game_state["_id"])
+    return game_state
 
 # Route: Get all games data
 @app.route("/api/games", methods=["GET"])
@@ -52,8 +58,15 @@ def delete_all_games():
 @app.route("/api/games", methods=["POST"])
 def save_game():
     data = request.json
-    if not data or "room" not in data or "winner" not in data or "board" not in data or "moves" not in data:
-        return jsonify({"error": "Invalid data"}), 400
+    print(f"Received data: {data}")
+    required_fields = {"room", "winner", "board", "moves"}
+    missing_fields = required_fields - data.keys()
+    if missing_fields:
+        return jsonify({"error": f"Missing fields: {', '.join(missing_fields)}"}), 400
+    
+    existing_game = games_collection.find_one({"room": data["room"], "winner": {"$exists": True}})
+    if existing_game:
+        return jsonify({"error": "Game already saved"}), 400
 
     db.games.insert_one(data)
     return jsonify({"message": "Game saved successfully!"}), 201
@@ -138,6 +151,7 @@ def on_join(data):
     username = data.get("username")
 
     if not room or not username:
+        print("Invalid join data:", data)
         return
 
     join_room(room)
@@ -154,7 +168,10 @@ def on_join(data):
             "turn": "White",
             "moves": [],
         }
+        games_collection.insert_one(game_state)
+        print(f"Initialized game state for room {room}: {game_state}")
 
+    game_state = serialize_game_state(game_state)
     print(f"Game state for room {room} after join:", game_state)
     emit("game_state", game_state, room=room)
     emit("player_joined", {"username": username}, room=room)
@@ -185,7 +202,6 @@ def on_move(data):
         print("Invalid data in move event:", data)
         return
 
-    # Ensure game_state is initialized
     game_state = games_collection.find_one({"room": room}, {"_id": 0})
     if not game_state:
         print(f"Game state not found for room {room}. Initializing game state.")
@@ -199,17 +215,51 @@ def on_move(data):
         }
         games_collection.insert_one(game_state)
 
-    print(f"Current game state for room {room}: {game_state}")
+    if "mainBoard" not in game_state or "secondaryBoard" not in game_state:
+        print(f"Game state for room {room} is incomplete. Reinitializing boards.")
+        initial_board = create_initial_board()
+        game_state["mainBoard"] = initial_board
+        game_state["secondaryBoard"] = initial_board
+        games_collection.update_one({"room": room}, {"$set": game_state})
 
-    update_field = {
-        "mainBoard": board if board_type == "main" else game_state["mainBoard"],
-        "secondaryBoard": board if board_type == "secondary" else game_state["secondaryBoard"],
-    }
-    update_field = {k: v for k, v in update_field.items() if v is not None}
+    board_key_map = {"main": "mainBoard", "secondary": "secondaryBoard"}
+    if board_type not in board_key_map:
+        print(f"Invalid board type '{board_type}' in game state for room {room}.")
+        return
+
+    board_key = board_key_map[board_type]
+
+    from_row, from_col = move["from"]
+    to_row, to_col = move["to"]
+
+    moving_piece = game_state[board_key][from_row][from_col]
+    target_piece = game_state[board_key][to_row][to_col]
+
+    game_state[board_key][to_row][to_col] = moving_piece
+    game_state[board_key][from_row][from_col] = None
+
+    if board_type == "main" and target_piece:
+        for r in range(8):
+            for c in range(8):
+                if game_state["secondaryBoard"][r][c] == target_piece:
+                    game_state["secondaryBoard"][r][c] = None
+                    break
+
+    move_description = (
+        f"{moving_piece} moved from {chr(97 + from_col)}{8 - from_row} to {chr(97 + to_col)}{8 - to_row} on {board_type} board"
+    )
+    if target_piece:
+        move_description += f", capturing {target_piece}"
 
     games_collection.update_one(
         {"room": room},
-        {"$set": update_field, "$push": {"moves": move}},
+        {
+            "$set": {
+                "mainBoard": game_state["mainBoard"],
+                "secondaryBoard": game_state["secondaryBoard"],
+            },
+            "$push": {"moves": move_description},
+        },
     )
 
     game_state = games_collection.find_one({"room": room}, {"_id": 0})
