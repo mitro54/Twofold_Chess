@@ -141,17 +141,21 @@ def on_join(data):
         return
 
     join_room(room)
+    print(f"{username} joined room {room}")  # Debugging log
     game_state = games_collection.find_one({"room": room}, {"_id": 0})
 
     if not game_state:
+        print(f"Creating initial game state for room: {room}")
         initial_board = create_initial_board()
         game_state = {
+            "room": room,
             "mainBoard": initial_board,
             "secondaryBoard": initial_board,
             "turn": "White",
             "moves": [],
         }
 
+    print(f"Game state for room {room} after join:", game_state)
     emit("game_state", game_state, room=room)
     emit("player_joined", {"username": username}, room=room)
 
@@ -178,16 +182,28 @@ def on_move(data):
     move = data.get("move")
 
     if not room or not board_type or not board or not move:
+        print("Invalid data in move event:", data)
         return
 
-    if isinstance(move, dict):
-        from_pos = f"{chr(97 + move['from'][1])}{8 - move['from'][0]}"
-        to_pos = f"{chr(97 + move['to'][1])}{8 - move['to'][0]}"
-        move = f"Moved from {from_pos} to {to_pos}"
+    # Ensure game_state is initialized
+    game_state = games_collection.find_one({"room": room}, {"_id": 0})
+    if not game_state:
+        print(f"Game state not found for room {room}. Initializing game state.")
+        initial_board = create_initial_board()
+        game_state = {
+            "room": room,
+            "mainBoard": initial_board,
+            "secondaryBoard": initial_board,
+            "turn": "White",
+            "moves": [],
+        }
+        games_collection.insert_one(game_state)
+
+    print(f"Current game state for room {room}: {game_state}")
 
     update_field = {
-        "mainBoard": board if board_type == "main" else None,
-        "secondaryBoard": board if board_type == "secondary" else None,
+        "mainBoard": board if board_type == "main" else game_state["mainBoard"],
+        "secondaryBoard": board if board_type == "secondary" else game_state["secondaryBoard"],
     }
     update_field = {k: v for k, v in update_field.items() if v is not None}
 
@@ -197,6 +213,8 @@ def on_move(data):
     )
 
     game_state = games_collection.find_one({"room": room}, {"_id": 0})
+    print(f"Updated game state for room {room}: {game_state}")
+
     socketio.emit("game_update", game_state, room=room)
 
 

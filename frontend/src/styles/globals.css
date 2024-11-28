@@ -8,8 +8,8 @@
   border: 0;
   font-size: 100%;
   box-sizing: border-box;
-  user-select: none;
-  -webkit-user-select: none;
+  /* user-select: none;
+  -webkit-user-select: none; */
 }
 
 body {

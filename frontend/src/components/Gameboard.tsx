@@ -66,7 +66,20 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
       setMainBoard(data.mainBoard);
       setSecondaryBoard(data.secondaryBoard);
       setTurn(data.turn);
+      setMoveHistory(data.moves || []);
     });
+  
+    newSocket.on("game_update", (data) => {
+      if (!data || !data.mainBoard || !data.secondaryBoard) {
+        console.error("Invalid game_update data received:", data);
+        return;
+      }
+    
+      setMainBoard(data.mainBoard);
+      setSecondaryBoard(data.secondaryBoard);
+      setTurn(data.turn || "White");
+      setMoveHistory(data.moves || []);
+    });    
 
     const handleKeyPress = (event: KeyboardEvent) => {
       if (event.code === "Space") {
@@ -158,7 +171,17 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
           room,
           boardType: activeBoard,
           board: newBoard,
+          move: {
+            from: [fromRow, fromCol],
+            to: [row, col],
+          },
         });
+        
+        console.log("Move event emitted:", {
+          room,
+          boardType: activeBoard,
+          board: newBoard,
+        });           
   
         toggleBoard();
   
