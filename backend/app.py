@@ -1,3 +1,7 @@
+######################### IMPORTS #########################
+
+
+
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, join_room, leave_room, emit
@@ -5,16 +9,33 @@ from pymongo import MongoClient
 import os
 from bson import ObjectId
 
+
+
+######################### APPLICATION INITIALIZATION #########################
+
+
+
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 app.config["SECRET_KEY"] = "lalalalala"
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# MongoDB setup
+
+
+######################### MONGODB SETUP #########################
+
+
+
 mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/chess")
 client = MongoClient(mongo_uri)
 db = client.chess
 games_collection = db.games
+
+
+
+######################### BOARD SETUP #########################
+
+
 
 def create_initial_board(is_white_bottom=True):
     empty_row = [None] * 8
@@ -31,15 +52,27 @@ def create_initial_board(is_white_bottom=True):
         white_pieces if is_white_bottom else black_pieces,
     ]
 
+
+
+######################### UTILITIES #########################
+
+
+
 def serialize_game_state(game_state):
     if "_id" in game_state:
         game_state["_id"] = str(game_state["_id"])
     return game_state
 
+
+
+######################### ROUTES #########################
+
+
+
 # Route: Get all games data
 @app.route("/api/games", methods=["GET"])
 def get_all_games():
-    games = list(games_collection.find({}, {"_id": 0}))
+    games = list(games_collection.find({"status": "completed"}, {"_id": 0}))
     return jsonify(games), 200
 
 
@@ -85,7 +118,10 @@ def reset_game():
         "secondaryBoard": initial_board,
         "turn": "White",
         "moves": [],
+        "winner": None,
+        "status": "ongoing",
     }
+    
     games_collection.update_one(
         {"room": room}, {"$set": game_state}, upsert=True
     )
@@ -144,6 +180,11 @@ def get_game_state():
     return jsonify(game_state)
 
 
+
+######################### SOCKETS #########################
+
+
+
 # WebSocket: Handle player joining a room
 @socketio.on("join")
 def on_join(data):
@@ -189,6 +230,33 @@ def on_leave(data):
     leave_room(room)
     emit("player_left", {"username": username}, room=room)
 
+#WebSocket: Handle game reset
+@socketio.on("reset")
+def on_reset(data):
+    room = data.get("room")
+
+    if not room:
+        print("No room provided for reset")
+        return
+
+    initial_board = create_initial_board()
+    game_state = {
+        "mainBoard": initial_board,
+        "secondaryBoard": initial_board,
+        "turn": "White",
+        "moves": [],
+        "status": "in_progress",
+    }
+
+    games_collection.update_one(
+        {"room": room},
+        {"$set": game_state},
+        upsert=True
+    )
+
+    socketio.emit("game_reset", game_state, room=room)
+    print(f"Game reset successfully for room {room}")
+
 
 # WebSocket: Handle move events
 @socketio.on("move")
@@ -202,6 +270,15 @@ def on_move(data):
         print("Invalid data in move event:", data)
         return
 
+    piece = move.get("piece")
+    from_pos = move.get("from")
+    to_pos = move.get("to")
+    captured = move.get("captured", None)
+
+    if not piece or not from_pos or not to_pos:
+        print("Invalid move data:", move)
+        return
+
     game_state = games_collection.find_one({"room": room}, {"_id": 0})
     if not game_state:
         print(f"Game state not found for room {room}. Initializing game state.")
@@ -212,54 +289,37 @@ def on_move(data):
             "secondaryBoard": initial_board,
             "turn": "White",
             "moves": [],
+            "status": "ongoing",
         }
         games_collection.insert_one(game_state)
 
-    if "mainBoard" not in game_state or "secondaryBoard" not in game_state:
-        print(f"Game state for room {room} is incomplete. Reinitializing boards.")
-        initial_board = create_initial_board()
-        game_state["mainBoard"] = initial_board
-        game_state["secondaryBoard"] = initial_board
-        games_collection.update_one({"room": room}, {"$set": game_state})
+    print(f"Current game state for room {room}: {game_state}")
 
-    board_key_map = {"main": "mainBoard", "secondary": "secondaryBoard"}
-    if board_type not in board_key_map:
-        print(f"Invalid board type '{board_type}' in game state for room {room}.")
-        return
+    from_pos_str = f"{chr(97 + from_pos[1])}{8 - from_pos[0]}"
+    to_pos_str = f"{chr(97 + to_pos[1])}{8 - to_pos[0]}"
 
-    board_key = board_key_map[board_type]
+    if captured:
+        move_description = f"{piece} captured {captured} at {to_pos_str} on {board_type} board"
+    else:
+        move_description = f"{piece} moved from {from_pos_str} to {to_pos_str} on {board_type} board"
 
-    from_row, from_col = move["from"]
-    to_row, to_col = move["to"]
+    update_field = {
+        "mainBoard": board if board_type == "main" else game_state["mainBoard"],
+        "secondaryBoard": board if board_type == "secondary" else game_state["secondaryBoard"],
+    }
 
-    moving_piece = game_state[board_key][from_row][from_col]
-    target_piece = game_state[board_key][to_row][to_col]
-
-    game_state[board_key][to_row][to_col] = moving_piece
-    game_state[board_key][from_row][from_col] = None
-
-    if board_type == "main" and target_piece:
-        for r in range(8):
-            for c in range(8):
-                if game_state["secondaryBoard"][r][c] == target_piece:
-                    game_state["secondaryBoard"][r][c] = None
+    if captured and board_type == "main":
+        secondary_board = game_state["secondaryBoard"]
+        for row in secondary_board:
+            for col_index, cell in enumerate(row):
+                if cell == captured:
+                    row[col_index] = None
                     break
-
-    move_description = (
-        f"{moving_piece} moved from {chr(97 + from_col)}{8 - from_row} to {chr(97 + to_col)}{8 - to_row} on {board_type} board"
-    )
-    if target_piece:
-        move_description += f", capturing {target_piece}"
+        update_field["secondaryBoard"] = secondary_board
 
     games_collection.update_one(
         {"room": room},
-        {
-            "$set": {
-                "mainBoard": game_state["mainBoard"],
-                "secondaryBoard": game_state["secondaryBoard"],
-            },
-            "$push": {"moves": move_description},
-        },
+        {"$set": update_field, "$push": {"moves": move_description}},
     )
 
     game_state = games_collection.find_one({"room": room}, {"_id": 0})
@@ -275,17 +335,42 @@ def on_finish_game(data):
     room = data.get("room")
     winner = data.get("winner")
     board = data.get("board")
+    moves = data.get("moves")
 
-    if not room or not winner or not board:
+    if not room or not winner or not board or not moves:
+        print("Invalid finish_game data:", data)
         return
 
-    game_state = games_collection.find_one({"room": room}, {"_id": 0})
-    if game_state:
-        games_collection.update_one(
-            {"room": room},
-            {"$set": {"winner": winner, "checkmateBoard": board}},
-        )
-        emit("game_finished", {"winner": winner, "board": board}, room=room)
+    completed_game_data = {
+        "room": room,
+        "winner": winner,
+        "board": board,
+        "moves": moves,
+        "status": "completed",
+    }
+    games_collection.insert_one(completed_game_data)
+
+    initial_board = create_initial_board()
+    reset_game_state = {
+        "mainBoard": initial_board,
+        "secondaryBoard": initial_board,
+        "turn": "White",
+        "moves": [],
+        "status": "ongoing",
+    }
+    games_collection.update_one(
+        {"room": room},
+        {"$set": reset_game_state},
+        upsert=True
+    )
+
+    socketio.emit("game_reset", reset_game_state, room=room)
+    print(f"Game finished for room {room} and state reset for a new game.")
+
+
+
+######################### MAIN EXECUTION #########################
+
 
 
 if __name__ == "__main__":

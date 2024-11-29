@@ -57,6 +57,23 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
   const [socket, setSocket] = useState<Socket | null>(null);
 
   useEffect(() => {
+    if (socket) {
+      socket.on("game_reset", (data) => {
+        setMainBoard(data.mainBoard);
+        setSecondaryBoard(data.secondaryBoard);
+        setTurn(data.turn);
+        setMoveHistory([]);
+        setGameFinished(false);
+      });
+    }
+    return () => {
+      if (socket) {
+        socket.off("game_reset");
+      }
+    };
+  }, [socket]);  
+
+  useEffect(() => {
     const newSocket = io("http://localhost:5001");
     setSocket(newSocket);
 
@@ -147,16 +164,6 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
   
         setBoard(newBoard);
   
-        if (activeBoard === "main" && targetPiece) {
-          const targetPieceID = targetPiece;
-          setSecondaryBoard((prevBoard) =>
-            prevBoard.map((row) =>
-              row.map((piece) => (piece === targetPieceID ? null : piece))
-            )
-          );
-        }
-        
-  
         let moveDescription = `${piece} moved from ${String.fromCharCode(97 + fromCol)}${8 - fromRow} to ${String.fromCharCode(97 + col)}${8 - row} on ${activeBoard} board`;
   
         if (targetPiece) {
@@ -174,14 +181,10 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
           move: {
             from: [fromRow, fromCol],
             to: [row, col],
+            piece,
+            captured: targetPiece || null,
           },
         });
-        
-        console.log("Move event emitted:", {
-          room,
-          boardType: activeBoard,
-          board: newBoard,
-        });           
   
         toggleBoard();
   
@@ -199,8 +202,6 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
     }
   };
   
-  
-  
   const toggleBoard = () => {
     setActiveBoard((prev) => (prev === "main" ? "secondary" : "main"));
     setSelectedSquare(null);
@@ -209,40 +210,18 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
   const handleFinishGame = () => {
     if (winner && checkmateBoard) {
       const gameRoom = room || "local";
+      
       if (socket) {
         socket.emit("finish_game", {
           room: gameRoom,
           winner,
           board: checkmateBoard,
+          moves: moveHistory,
         });
   
         setShowFinishModal(false);
         setGameFinished(true);
         resetBoard();
-  
-        const gameData = {
-          room: gameRoom,
-          winner,
-          board: checkmateBoard,
-          moves: moveHistory,
-        };
-  
-        if (winner) {
-          fetch("http://localhost:5001/api/games", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(gameData),
-          })
-            .then((response) => response.json())
-            .then((data) => {
-              console.log("Game saved to database:", data);
-            })
-            .catch((error) => {
-              console.error("Error saving game to database:", error);
-            });
-        }
       }
     }
   };
