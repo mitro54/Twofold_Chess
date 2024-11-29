@@ -1,15 +1,15 @@
-import { GetServerSideProps } from 'next';
-import { getProviders, signIn, ClientSafeProvider } from 'next-auth/react';
+import { GetServerSideProps } from "next";
+import { getProviders, signIn, ClientSafeProvider, useSession } from "next-auth/react";
+import ReturnToMainMenu from "../../components/ReturnToMainMenu";
+import { useEffect } from "react";
+import { useRouter } from "next/router";
 
 interface SignInProps {
   providers: Record<string, ClientSafeProvider> | null;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export const getServerSideProps: GetServerSideProps<SignInProps> = async (context) => {
+export const getServerSideProps: GetServerSideProps<SignInProps> = async () => {
   const providers = await getProviders();
-  console.log('Providers:', providers);
-
   return {
     props: {
       providers,
@@ -18,22 +18,46 @@ export const getServerSideProps: GetServerSideProps<SignInProps> = async (contex
 };
 
 const SignIn = ({ providers }: SignInProps) => {
+  const { data: session, status } = useSession();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (status === "authenticated") {
+      router.replace("/history");
+    }
+  }, [status, router]);
+
+  if (status === "authenticated") {
+    return null;
+  }
+
   if (!providers) {
-    return <div>Error loading providers</div>;
+    return <div className="text-center mt-10">Error loading providers</div>;
   }
 
   return (
-    <div className="flex flex-col items-center justify-center h-screen">
-      <h1 className="text-4xl font-bold mb-6">Sign in to View History</h1>
-      {Object.values(providers).map((provider) => (
-        <button
-          key={provider.id}
-          onClick={() => signIn(provider.id, { callbackUrl: '/history' })}
-          className="bg-blue-600 text-white px-4 py-2 rounded"
-        >
-          Sign in with {provider.name}
-        </button>
-      ))}
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-900 text-white">
+      <h1 className="text-4xl font-bold mb-6">Sign in to view history.</h1>
+      <div className="flex flex-col items-center gap-4">
+        {Object.values(providers).map((provider) => (
+          <button
+            key={provider.id}
+            onClick={() => signIn(provider.id, { callbackUrl: "/history" })}
+            className="bg-gray-800 text-white px-6 py-3 rounded-md hover:bg-gray-700 flex items-center gap-2"
+          >
+            <img
+              src="/github.svg"
+              alt={`${provider.name} logo`}
+              className="w-6 h-6"
+            />
+            Sign in with {provider.name}
+          </button>
+        ))}
+
+        <div className="mt-0">
+          <ReturnToMainMenu />
+        </div>
+      </div>
     </div>
   );
 };

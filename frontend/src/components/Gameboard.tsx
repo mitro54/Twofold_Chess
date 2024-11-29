@@ -262,7 +262,6 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
   return (
     <div className="flex flex-col items-center">
       <h2 className="text-2xl font-bold mb-4 text-gray-600">Room: {room}</h2>
-      <p className="text-lg font-semibold mb-2">Turn: {turn}</p>
 
       <div className="relative w-[400px] h-[400px]">
         <div

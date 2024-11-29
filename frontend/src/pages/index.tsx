@@ -60,6 +60,16 @@ export default function Home() {
           </>
         )}
       </div>
+      {showGameOptions && (
+        <div className="mt-4">
+          <Button
+            className="bg-gray-800 text-white rounded-md hover:bg-gray-700 transition"
+            onPress={() => setShowGameOptions(false)}
+          >
+            Return to Main Menu
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
