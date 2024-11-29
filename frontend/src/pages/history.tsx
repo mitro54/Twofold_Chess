@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import ReturnToMainMenu from "../components/ReturnToMainMenu";
+import { useSession, signIn } from "next-auth/react";
 
 interface Game {
   room: string;
@@ -9,10 +10,13 @@ interface Game {
 }
 
 const HistoryPage: React.FC = () => {
+  const { data: session, status } = useSession();
   const [games, setGames] = useState<Game[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!session) return;
+
     const fetchGames = async () => {
       try {
         const response = await fetch("http://localhost:5001/api/games");
@@ -26,7 +30,25 @@ const HistoryPage: React.FC = () => {
     };
 
     fetchGames();
-  }, []);
+  }, [session]);
+
+  if (status === "loading") {
+    return <div className="text-center text-lg font-semibold mt-10">Checking authentication...</div>;
+  }
+
+  if (!session) {
+    return (
+      <div className="text-center mt-10">
+        <p className="text-lg font-semibold mb-4">You need to sign in to view game history.</p>
+        <button
+          onClick={() => signIn()}
+          className="bg-blue-600 text-white px-4 py-2 rounded"
+        >
+          Sign in with GitHub
+        </button>
+      </div>
+    );
+  }
 
   if (loading) {
     return <div className="text-center text-lg font-semibold mt-10">Loading...</div>;
