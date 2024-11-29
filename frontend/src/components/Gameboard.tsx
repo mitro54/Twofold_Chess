@@ -185,7 +185,8 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
             captured: targetPiece || null,
           },
         });
-  
+
+        setTimeout(() => {
         toggleBoard();
   
         setTurnCount((prevCount) => {
@@ -196,7 +197,8 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
           }
           return newCount;
         });
-      }
+      }, 500);
+     }
     } else if (board[row][col]) {
       setSelectedSquare([row, col]);
     }
@@ -247,7 +249,7 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
           >
             {piece && (
               <span
-                className={`text-2xl font-bold leading-none ${
+                className={`text-3xl font-bold leading-none ${
                   piece.toUpperCase() === piece ? "text-white" : "text-black"
                 }`}
               >

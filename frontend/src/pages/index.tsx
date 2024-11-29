@@ -24,7 +24,7 @@ export default function Home() {
 
   return (
     <div className="flex flex-col justify-center items-center h-screen">
-      <h1 className="text-4xl font-bold mb-6">2-Step Chess</h1>
+      <h1 className="text-4xl font-bold mb-6">Twofold Chess</h1>
       <div className="flex space-x-4">
         {!showGameOptions ? (
           <>
