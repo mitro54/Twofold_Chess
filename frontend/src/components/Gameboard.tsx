@@ -44,8 +44,8 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
   const [secondaryBoard, setSecondaryBoard] = useState(createInitialBoard(true));
   const [activeBoard, setActiveBoard] = useState<"main" | "secondary">("main");
   const [selectedSquare, setSelectedSquare] = useState<[number, number] | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [turn, setTurn] = useState<"White" | "Black">("White");
-
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [turnCount, setTurnCount] = useState(0);
 

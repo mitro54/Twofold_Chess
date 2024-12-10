@@ -18,6 +18,7 @@ export const getServerSideProps: GetServerSideProps<SignInProps> = async () => {
 };
 
 const SignIn = ({ providers }: SignInProps) => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { data: session, status } = useSession();
   const router = useRouter();
 
