@@ -359,13 +359,37 @@ def on_move(data):
     else:
         move_description = f"{piece} moved from {from_pos_str} to {to_pos_str} on {board_type} board"
     
-    # Initialize definitive board states for the update
+    # Initialize definitive board states for the update by copying from the current game document
+    # These will be modified by the current move.
     new_main_board_state = [row[:] for row in current_game_doc["mainBoard"]]
     new_secondary_board_state = [row[:] for row in current_game_doc["secondaryBoard"]]
 
+    # Extract move coordinates for clarity
+    f_row, f_col = from_pos
+    t_row, t_col = to_pos
+
     if board_type == "main":
-        # The client sends the state of the board where the move happened.
-        new_main_board_state = board_state_from_client 
+        # Apply the move to the main board
+        print(f"APPLYING MOVE TO MAIN BOARD: Piece '{piece}' from [{f_row},{f_col}] to [{t_row},{t_col}]")
+        if not (0 <= f_row < len(new_main_board_state) and 0 <= f_col < len(new_main_board_state[0]) and \
+                0 <= t_row < len(new_main_board_state) and 0 <= t_col < len(new_main_board_state[0])):
+            print(f"ERROR: Move coordinates out of bounds for main board. From: {from_pos}, To: {to_pos}")
+            # Consider emitting an error back to client or handling more gracefully
+            return 
+        
+        # It's important that 'piece' from move_details is the actual piece ID being moved.
+        # The client sends board_state_from_client which is the state *before* this move.
+        # We apply the move to our server-side copy (new_main_board_state).
+        
+        # Verify piece at source on our server copy (optional, client should ensure this)
+        # if new_main_board_state[f_row][f_col] != piece:
+        #     print(f"WARNING: Piece mismatch. Client says '{piece}' moved from {from_pos}, but server main board has '{new_main_board_state[f_row][f_col]}'")
+            # Decide handling strategy: trust client, or use server's piece, or error
+
+        new_main_board_state[t_row][t_col] = piece # Place the piece at the destination
+        new_main_board_state[f_row][f_col] = None  # Clear the source square
+        print(f"Main board state AFTER move application: {new_main_board_state}")
+
         if captured:
             print(f"ASYMMETRIC CAPTURE (MAIN BOARD): Detected capture of '{captured}' at {to_pos} on main board.")
             # If a capture happened on the main board, find and remove the *captured piece* (by its name) from the secondary board.
@@ -385,13 +409,23 @@ def on_move(data):
             if not piece_removed:
                 print(f"ASYMMETRIC CAPTURE: WARNING - '{captured_piece_name}' was not found on the secondary board.")
             print(f"ASYMMETRIC CAPTURE: Secondary board state AFTER '{captured_piece_name}' removal attempt: {new_secondary_board_state}")
-        # If no capture on main, new_secondary_board_state remains as it was from current_game_doc
+        # If no capture on main, new_secondary_board_state remains as it was from current_game_doc (already copied)
 
     elif board_type == "secondary":
-        # The client sends the state of the board where the move happened.
-        new_secondary_board_state = board_state_from_client
+        # Apply the move to the secondary board
+        print(f"APPLYING MOVE TO SECONDARY BOARD: Piece '{piece}' from [{f_row},{f_col}] to [{t_row},{t_col}]")
+        if not (0 <= f_row < len(new_secondary_board_state) and 0 <= f_col < len(new_secondary_board_state[0]) and \
+                0 <= t_row < len(new_secondary_board_state) and 0 <= t_col < len(new_secondary_board_state[0])):
+            print(f"ERROR: Move coordinates out of bounds for secondary board. From: {from_pos}, To: {to_pos}")
+            # Consider emitting an error back to client or handling more gracefully
+            return
+
+        # Apply the move to our server-side copy (new_secondary_board_state).
+        new_secondary_board_state[t_row][t_col] = piece # Place the piece at the destination
+        new_secondary_board_state[f_row][f_col] = None  # Clear the source square
+        print(f"Secondary board state AFTER move application: {new_secondary_board_state}")
         # Captures on the secondary board do not affect the main board.
-        # new_main_board_state remains as it was from current_game_doc
+        # new_main_board_state remains as it was from current_game_doc (already copied)
 
     # Determine next turn and active board phase
     new_player_turn = current_player_turn
