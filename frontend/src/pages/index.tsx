@@ -1,4 +1,4 @@
-import { Button, Spacer } from "@heroui/react";
+import { Button } from "@heroui/react";
 import { useState } from "react";
 import { useRouter } from "next/router";
 
@@ -29,33 +29,31 @@ export default function Home() {
         {!showGameOptions ? (
           <>
             <Button
-              className="px-6 py-3 bg-gray-800 text-white rounded-md hover:bg-gray-700 transition"
-              onPress={handlePlayGame}
+              className="px-6 py-3 bg-gray-800 text-white rounded-md hover:bg-gray-700 transition text-center flex justify-center items-center"
+              onClick={handlePlayGame}
             >
-              Play a Game
+              Play Game
             </Button>
-            <Spacer y={1} />
             <Button
-              className="px-6 py-3 bg-gray-800 text-white rounded-md hover:bg-gray-700 transition"
-              onPress={handleSeeHistory}
+              className="px-6 py-3 bg-gray-800 text-white rounded-md hover:bg-gray-700 transition text-center flex justify-center items-center"
+              onClick={handleSeeHistory}
             >
-              See All Games History
+              See History
             </Button>
           </>
         ) : (
           <>
             <Button
-              className="px-6 py-3 bg-gray-800 text-white rounded-md hover:bg-gray-700 transition"
-              onPress={handleLocalGame}
+              className="px-6 py-3 bg-green-600 text-white rounded-md hover:bg-green-500 transition text-center flex justify-center items-center"
+              onClick={handleLocalGame}
             >
               Local Game
             </Button>
-            <Spacer y={1} />
             <Button
-              className="px-6 py-3 bg-gray-500 text-white rounded-md hover:bg-gray-400 transition"
-              onPress={handlePlayWithFriend}
+              className="px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-500 transition text-center flex justify-center items-center"
+              onClick={handlePlayWithFriend}
             >
-              Play with Friend
+              Play with a Friend
             </Button>
           </>
         )}
@@ -63,7 +61,7 @@ export default function Home() {
       {showGameOptions && (
         <div className="mt-4">
           <Button
-            className="bg-gray-800 text-white rounded-md hover:bg-gray-700 transition"
+            className="bg-gray-800 text-white rounded-md hover:bg-gray-700 transition text-center"
             onPress={() => setShowGameOptions(false)}
           >
             Return to Main Menu
