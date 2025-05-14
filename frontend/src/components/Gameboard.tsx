@@ -11,7 +11,7 @@ import {
   PieceInfo,
   isCheckmate,
   isStalemate,
-  isKingInCheck // Import isKingInCheck if you want to display check status separately
+  // isKingInCheck // Removed as it's not actively used yet for UI display
 } from "../utils/chessLogic";
 
 interface GameStateData {
@@ -245,7 +245,7 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
         visualUpdateTimeoutRef.current = null;
       }
     };
-  }, [usernameFromProps, roomFromProps]);
+  }, [usernameFromProps, roomFromProps, gameFinished]);
 
   const resetBoard = async () => {
     console.log("FRONTEND: Resetting board for room:", roomFromProps);
