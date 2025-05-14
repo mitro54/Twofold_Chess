@@ -46,6 +46,7 @@ const SignIn = ({ providers }: SignInProps) => {
             onClick={() => signIn(provider.id, { callbackUrl: "/history" })}
             className="bg-gray-800 text-white px-6 py-3 rounded-md hover:bg-gray-700 flex items-center gap-2"
           >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/github.svg"
               alt={`${provider.name} logo`}

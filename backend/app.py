@@ -7,7 +7,7 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, join_room, leave_room, emit
 from pymongo import MongoClient
 import os
-from bson import ObjectId
+from bson import ObjectId 
 
 
 
@@ -117,6 +117,7 @@ def reset_game():
         "mainBoard": initial_board,
         "secondaryBoard": initial_board,
         "turn": "White",
+        "active_board_phase": "main",
         "moves": [],
         "winner": None,
         "status": "ongoing",
@@ -173,6 +174,7 @@ def get_game_state():
             "mainBoard": initial_board,
             "secondaryBoard": initial_board,
             "turn": "White",
+            "active_board_phase": "main",
             "moves": [],
         }
         games_collection.insert_one({"room": room, **game_state})
@@ -196,25 +198,42 @@ def on_join(data):
         return
 
     join_room(room)
-    print(f"{username} joined room {room}")  # Debugging log
-    game_state = games_collection.find_one({"room": room}, {"_id": 0})
+    print(f"{username} joined room {room}")
+    game_state = games_collection.find_one({"room": room})
 
     if not game_state:
         print(f"Creating initial game state for room: {room}")
         initial_board = create_initial_board()
-        game_state = {
+        game_state_data = {
             "room": room,
             "mainBoard": initial_board,
             "secondaryBoard": initial_board,
             "turn": "White",
+            "active_board_phase": "main",
             "moves": [],
+            "status": "ongoing"
         }
-        games_collection.insert_one(game_state)
-        print(f"Initialized game state for room {room}: {game_state}")
+        games_collection.insert_one(game_state_data)
+        game_state = games_collection.find_one({"room": room})
+    else:
+        if "active_board_phase" not in game_state:
+            print(f"Migrating existing game state for room {room} to include active_board_phase.")
+            # Ensure 'turn' also exists, defaulting to 'White' if not
+            current_turn = game_state.get("turn", "White")
+            games_collection.update_one(
+                {"_id": game_state["_id"]},
+                {"$set": {"active_board_phase": "main", "turn": current_turn}}
+            )
+            game_state["active_board_phase"] = "main"
+            game_state["turn"] = current_turn
+    
+    if not game_state: # Should be extremely rare
+        print(f"CRITICAL: game_state for room {room} is None after create/find attempt.")
+        return
 
-    game_state = serialize_game_state(game_state)
-    print(f"Game state for room {room} after join:", game_state)
-    emit("game_state", game_state, room=room)
+    game_state_to_emit = serialize_game_state(game_state.copy())
+    print(f"Game state for room {room} after join:", game_state_to_emit)
+    emit("game_state", game_state_to_emit, room=room)
     emit("player_joined", {"username": username}, room=room)
 
 
@@ -244,6 +263,7 @@ def on_reset(data):
         "mainBoard": initial_board,
         "secondaryBoard": initial_board,
         "turn": "White",
+        "active_board_phase": "main",
         "moves": [],
         "status": "in_progress",
     }
@@ -263,69 +283,153 @@ def on_reset(data):
 def on_move(data):
     room = data.get("room")
     board_type = data.get("boardType")
-    board = data.get("board")
-    move = data.get("move")
+    board_state_from_client = data.get("board")
+    move_details = data.get("move")
 
-    if not room or not board_type or not board or not move:
+    # Initial fetch of game doc to get initial turn/phase for logging
+    temp_game_doc_for_log = games_collection.find_one({"room": room}) 
+    initial_player_turn_log = temp_game_doc_for_log.get('turn') if temp_game_doc_for_log else 'N/A'
+    initial_phase_log = temp_game_doc_for_log.get('active_board_phase') if temp_game_doc_for_log else 'N/A'
+    print(f"MOVE START: room={room}, clientBoardType={board_type}, clientMoveDetails={move_details}, playerTurnBeforeLogic={initial_player_turn_log}, phaseBeforeLogic={initial_phase_log}")
+
+    if not room or not board_type or not board_state_from_client or not move_details:
         print("Invalid data in move event:", data)
         return
 
-    piece = move.get("piece")
-    from_pos = move.get("from")
-    to_pos = move.get("to")
-    captured = move.get("captured", None)
+    piece = move_details.get("piece")
+    from_pos = move_details.get("from")
+    to_pos = move_details.get("to")
+    captured = move_details.get("captured", None)
 
     if not piece or not from_pos or not to_pos:
-        print("Invalid move data:", move)
+        print("Invalid move data:", move_details)
         return
 
-    game_state = games_collection.find_one({"room": room}, {"_id": 0})
-    if not game_state:
+    current_game_doc = games_collection.find_one({"room": room})
+
+    if not current_game_doc:
         print(f"Game state not found for room {room}. Initializing game state.")
         initial_board = create_initial_board()
-        game_state = {
+        game_state_data = {
             "room": room,
             "mainBoard": initial_board,
             "secondaryBoard": initial_board,
             "turn": "White",
+            "active_board_phase": "main",
             "moves": [],
             "status": "ongoing",
         }
-        games_collection.insert_one(game_state)
+        games_collection.insert_one(game_state_data)
+        current_game_doc = games_collection.find_one({"room": room})
+        if not current_game_doc:
+            print(f"CRITICAL: Failed to initialize and fetch game state for room {room} in on_move.")
+            return
 
-    print(f"Current game state for room {room}: {game_state}")
+    if "active_board_phase" not in current_game_doc:
+        current_game_doc["active_board_phase"] = "main"
+        current_game_doc["turn"] = current_game_doc.get("turn", "White")
+        games_collection.update_one(
+            {"_id": current_game_doc["_id"]},
+            {"$set": {"active_board_phase": "main", "turn": current_game_doc["turn"]}}
+        )
+        print(f"Migrated game state for room {room} in on_move to include active_board_phase.")
+
+    print(f"Current game state for room {room} before move: {current_game_doc}")
+
+    current_player_turn = current_game_doc["turn"]
+    current_active_board_phase = current_game_doc["active_board_phase"]
+
+    if board_type != current_active_board_phase:
+        print(f"Invalid move: Attempted move on '{board_type}' board, but expected on '{current_active_board_phase}' board for player {current_player_turn}.")
+        emit("move_error", {
+            "message": f"Incorrect board. It's {current_player_turn}'s turn on the {current_active_board_phase} board.",
+            "expectedBoard": current_active_board_phase,
+            "actualBoard": board_type
+        }, room=request.sid)
+        return
 
     from_pos_str = f"{chr(97 + from_pos[1])}{8 - from_pos[0]}"
     to_pos_str = f"{chr(97 + to_pos[1])}{8 - to_pos[0]}"
+
+    # Added before the if captured block for comprehensive logging
+    print(f"DEBUG CAPTURE INFO: PlayerTurn={current_player_turn}, BoardTypeForMove={board_type}, CapturedPieceString={captured}, TargetSquare={to_pos}, MainBoardStateBeforeAnyCaptureLogic={current_game_doc['mainBoard']}, SecondaryBoardStateBeforeAnyCaptureLogic={current_game_doc['secondaryBoard']}")
 
     if captured:
         move_description = f"{piece} captured {captured} at {to_pos_str} on {board_type} board"
     else:
         move_description = f"{piece} moved from {from_pos_str} to {to_pos_str} on {board_type} board"
+    
+    # Initialize definitive board states for the update
+    new_main_board_state = [row[:] for row in current_game_doc["mainBoard"]]
+    new_secondary_board_state = [row[:] for row in current_game_doc["secondaryBoard"]]
 
-    update_field = {
-        "mainBoard": board if board_type == "main" else game_state["mainBoard"],
-        "secondaryBoard": board if board_type == "secondary" else game_state["secondaryBoard"],
-    }
-
-    if captured and board_type == "main":
-        secondary_board = game_state["secondaryBoard"]
-        for row in secondary_board:
-            for col_index, cell in enumerate(row):
-                if cell == captured:
-                    row[col_index] = None
+    if board_type == "main":
+        # The client sends the state of the board where the move happened.
+        new_main_board_state = board_state_from_client 
+        if captured:
+            print(f"ASYMMETRIC CAPTURE (MAIN BOARD): Detected capture of '{captured}' at {to_pos} on main board.")
+            # If a capture happened on the main board, find and remove the *captured piece* (by its name) from the secondary board.
+            captured_piece_name = captured # e.g., 'p5'
+            print(f"ASYMMETRIC CAPTURE: Attempting to find and remove '{captured_piece_name}' from secondary board.")
+            print(f"ASYMMETRIC CAPTURE: Secondary board state BEFORE '{captured_piece_name}' removal: {new_secondary_board_state}")
+            piece_removed = False
+            for r_idx, row_content in enumerate(new_secondary_board_state):
+                for c_idx, piece_on_square in enumerate(row_content):
+                    if piece_on_square == captured_piece_name:
+                        print(f"ASYMMETRIC CAPTURE: Found '{captured_piece_name}' at secondary_board[{r_idx}][{c_idx}]. Setting to None.")
+                        new_secondary_board_state[r_idx][c_idx] = None
+                        piece_removed = True
+                        break # Assume piece names are unique, so we can stop once found
+                if piece_removed:
                     break
-        update_field["secondaryBoard"] = secondary_board
+            if not piece_removed:
+                print(f"ASYMMETRIC CAPTURE: WARNING - '{captured_piece_name}' was not found on the secondary board.")
+            print(f"ASYMMETRIC CAPTURE: Secondary board state AFTER '{captured_piece_name}' removal attempt: {new_secondary_board_state}")
+        # If no capture on main, new_secondary_board_state remains as it was from current_game_doc
+
+    elif board_type == "secondary":
+        # The client sends the state of the board where the move happened.
+        new_secondary_board_state = board_state_from_client
+        # Captures on the secondary board do not affect the main board.
+        # new_main_board_state remains as it was from current_game_doc
+
+    # Determine next turn and active board phase
+    new_player_turn = current_player_turn
+    new_active_board_phase = current_active_board_phase
+
+    if current_active_board_phase == "main":
+        new_active_board_phase = "secondary"
+    elif current_active_board_phase == "secondary":
+        new_active_board_phase = "main"
+        new_player_turn = "Black" if current_player_turn == "White" else "White"
+
+    # Prepare the complete payload for the $set operation
+    final_db_set_payload = {
+        "mainBoard": new_main_board_state,
+        "secondaryBoard": new_secondary_board_state,
+        "turn": new_player_turn,
+        "active_board_phase": new_active_board_phase
+    }
+    
+    print(f"DB UPDATE PAYLOAD ($set): {final_db_set_payload}") # Log before DB update
 
     games_collection.update_one(
-        {"room": room},
-        {"$set": update_field, "$push": {"moves": move_description}},
+        {"_id": current_game_doc["_id"]},
+        {
+            "$set": final_db_set_payload,
+            "$push": {"moves": move_description}
+        }
     )
 
-    game_state = games_collection.find_one({"room": room}, {"_id": 0})
-    print(f"Updated game state for room {room}: {game_state}")
+    updated_game_state_full = games_collection.find_one({"_id": current_game_doc["_id"]})
+    
+    # Log before emitting game_update
+    if updated_game_state_full:
+        print(f"EMITTING GAME_UPDATE: {serialize_game_state(updated_game_state_full.copy())}")
+    else:
+        print(f"CRITICAL WARNING: updated_game_state_full is None before emitting game_update for room {room}")
 
-    socketio.emit("game_update", game_state, room=room)
+    socketio.emit("game_update", serialize_game_state(updated_game_state_full.copy()), room=room)
 
 
 

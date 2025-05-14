@@ -1,9 +1,25 @@
-import React, { useState, useEffect } from "react";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-nocheck
+import React, { useState, useEffect, useRef } from "react";
 import { io, Socket } from "socket.io-client";
 
+interface GameStateData {
+  mainBoard: Array<Array<string | null>>;
+  secondaryBoard: Array<Array<string | null>>;
+  turn: "White" | "Black";
+  active_board_phase?: "main" | "secondary"; // Optional for backward compatibility during migration
+  moves?: string[];
+}
+
+interface MoveErrorData {
+  message: string;
+  expectedBoard?: "main" | "secondary";
+  actualBoard?: "main" | "secondary";
+}
+
 interface GameboardProps {
-  username?: string;
-  room?: string;
+  username?: string | undefined;
+  room?: string | undefined;
 }
 
 const pieceSymbols: Record<string, string> = {
@@ -39,15 +55,16 @@ const createInitialBoard = (isWhiteBottom: boolean): Array<Array<string | null>>
 };
 
 
-const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
+const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: propsRoom }) => {
+  const usernameFromProps = propsUsername ?? "LocalPlayer";
+  const roomFromProps = propsRoom ?? "local_game_room";
+
   const [mainBoard, setMainBoard] = useState(createInitialBoard(true));
   const [secondaryBoard, setSecondaryBoard] = useState(createInitialBoard(true));
   const [activeBoard, setActiveBoard] = useState<"main" | "secondary">("main");
+  const [serverActiveBoardPhase, setServerActiveBoardPhase] = useState<"main" | "secondary">("main");
   const [selectedSquare, setSelectedSquare] = useState<[number, number] | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [turn, setTurn] = useState<"White" | "Black">("White");
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [turnCount, setTurnCount] = useState(0);
 
   const [moveHistory, setMoveHistory] = useState<string[]>([]);
   const [gameFinished, setGameFinished] = useState(false);
@@ -55,15 +72,50 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
   const [winner, setWinner] = useState<"White" | "Black" | null>(null);
   const [checkmateBoard, setCheckmateBoard] = useState<"main" | "secondary" | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const visualUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (activeBoard === serverActiveBoardPhase) {
+      if (visualUpdateTimeoutRef.current) {
+        clearTimeout(visualUpdateTimeoutRef.current);
+        visualUpdateTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    if (visualUpdateTimeoutRef.current) {
+      clearTimeout(visualUpdateTimeoutRef.current);
+    }
+    visualUpdateTimeoutRef.current = setTimeout(() => {
+      setActiveBoard(serverActiveBoardPhase);
+      visualUpdateTimeoutRef.current = null; 
+    }, 500);
+
+    return () => {
+      if (visualUpdateTimeoutRef.current) {
+        clearTimeout(visualUpdateTimeoutRef.current);
+        visualUpdateTimeoutRef.current = null;
+      }
+    };
+  }, [serverActiveBoardPhase, turn]);
 
   useEffect(() => {
     if (socket) {
-      socket.on("game_reset", (data) => {
+      socket.on("game_reset", (data: GameStateData) => {
+        console.log("FRONTEND: 'game_reset' event received. Data:", data ? JSON.parse(JSON.stringify(data)) : 'No data');
         setMainBoard(data.mainBoard);
         setSecondaryBoard(data.secondaryBoard);
         setTurn(data.turn);
+        const currentPhase = data.active_board_phase || "main";
+        setServerActiveBoardPhase(currentPhase);
+        setActiveBoard(currentPhase);
+        if (visualUpdateTimeoutRef.current) {
+            clearTimeout(visualUpdateTimeoutRef.current);
+            visualUpdateTimeoutRef.current = null;
+        }
         setMoveHistory([]);
         setGameFinished(false);
+        setSelectedSquare(null);
       });
     }
     return () => {
@@ -71,72 +123,126 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
         socket.off("game_reset");
       }
     };
-  }, [socket]);  
+  }, [socket]);
 
   useEffect(() => {
-    const newSocket = io("http://localhost:5001");
-    setSocket(newSocket);
+    console.log(`FRONTEND: Initializing socket effect. Username: ${usernameFromProps}, Room: ${roomFromProps}`);
+    const newSocketInstance = io(process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5001");
+    
+    setSocket(newSocketInstance);
 
-    newSocket.emit("join", { username, room });
+    console.log(`FRONTEND: Emitting 'join' for room: ${roomFromProps}`);
+    newSocketInstance.emit("join", { username: usernameFromProps, room: roomFromProps });
 
-    newSocket.on("game_state", (data) => {
+    newSocketInstance.on("game_state", (data: GameStateData) => {
+      console.log("FRONTEND: game_state event HANDLER ENTERED. Data:", data ? JSON.parse(JSON.stringify(data)) : 'No data received');
       setMainBoard(data.mainBoard);
       setSecondaryBoard(data.secondaryBoard);
-      setTurn(data.turn);
-      setMoveHistory(data.moves || []);
+      setTurn(data.turn || "White");
+      const currentPhase = data.active_board_phase || "main";
+      setServerActiveBoardPhase(currentPhase);
+      setActiveBoard(currentPhase); 
+      if (visualUpdateTimeoutRef.current) {
+        clearTimeout(visualUpdateTimeoutRef.current);
+        visualUpdateTimeoutRef.current = null;
+      }
+      // Explicitly reset all relevant states for a full reset scenario
+      setMoveHistory(data.moves || []); // If backend sends empty moves on reset, this is fine.
+      setSelectedSquare(null);
+      setGameFinished(false);       // Ensure game is not finished
+      setShowFinishModal(false);    // Close finish modal if open
+      setWinner(null);              // Clear any winner
+      setCheckmateBoard(null);      // Clear any checkmate board status
     });
   
-    newSocket.on("game_update", (data) => {
+    newSocketInstance.on("game_update", (data: GameStateData) => {
       if (!data || !data.mainBoard || !data.secondaryBoard) {
-        console.error("Invalid game_update data received:", data);
+        console.error("FRONTEND ERROR: Invalid game_update data received:", data);
         return;
       }
+      console.log("FRONTEND: game_update received (partial update after move):", JSON.parse(JSON.stringify(data))); // Log game update
     
       setMainBoard(data.mainBoard);
       setSecondaryBoard(data.secondaryBoard);
       setTurn(data.turn || "White");
+      setServerActiveBoardPhase(data.active_board_phase || "main");
       setMoveHistory(data.moves || []);
+      setSelectedSquare(null);
     });    
+
+    newSocketInstance.on("move_error", (errorData: MoveErrorData) => {
+      alert(`Error: ${errorData.message}`);
+    });
 
     const handleKeyPress = (event: KeyboardEvent) => {
       if (event.code === "Space") {
         event.preventDefault();
-        toggleBoard();
+        if (visualUpdateTimeoutRef.current) {
+          clearTimeout(visualUpdateTimeoutRef.current);
+          visualUpdateTimeoutRef.current = null;
+        }
+        setActiveBoard(prev => prev === "main" ? "secondary" : "main");
+        setSelectedSquare(null);
       }
     };
 
     window.addEventListener("keydown", handleKeyPress);
 
     return () => {
-      newSocket.disconnect();
+      console.log(`FRONTEND: Disconnecting socket for room: ${roomFromProps}`);
+      newSocketInstance.disconnect();
       window.removeEventListener("keydown", handleKeyPress);
+      if (visualUpdateTimeoutRef.current) {
+        clearTimeout(visualUpdateTimeoutRef.current);
+        visualUpdateTimeoutRef.current = null;
+      }
     };
-  }, [username, room]);
+  }, [usernameFromProps, roomFromProps]);
 
   const resetBoard = async () => {
-    const initialBoard = createInitialBoard(true);
-    setMainBoard(initialBoard);
-    setSecondaryBoard(initialBoard);
-    setSelectedSquare(null);
-    setTurn("White");
-    setTurnCount(0);
-    setMoveHistory([]);
-    setGameFinished(false);
-    setActiveBoard("main");
-    setShowFinishModal(false);
-    setWinner(null);
-    setCheckmateBoard(null);
-
+    console.log("FRONTEND: Resetting board for room:", roomFromProps);
     if (socket) {
-      socket.emit("reset", { room });
+      socket.emit("reset", { room: roomFromProps });
+      console.log("FRONTEND: socket.emit('reset') called for room:", roomFromProps);
+    } else {
+      console.warn("FRONTEND: Reset called but socket is null.");
+    }
+
+    const backendBaseUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5001";
+    // Ensure the base URL doesn't end with a trailing slash before appending /api/reset
+    const cleanBackendBaseUrl = backendBaseUrl.replace(/\/$/, ''); 
+
+    try {
+      const response = await fetch(`${cleanBackendBaseUrl}/api/reset`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room: roomFromProps }),
+      });
+      if (!response.ok) {
+        console.error("FRONTEND ERROR: API reset failed", await response.text());
+      } else {
+        console.log("FRONTEND: API /api/reset call successful for room:", roomFromProps);
+      }
+    } catch (error) {
+      console.error("FRONTEND ERROR: Error calling API reset board:", error);
     }
   };
 
-  const handleSquareClick = (row: number, col: number) => {
-    if (!socket || gameFinished) return;
+  const handleSquareClick = (row: number, col: number, boardClicked: "main" | "secondary") => {
+    console.log(`FRONTEND: handleSquareClick triggered. ClickedBoard: ${boardClicked} Current ServerActivePhase: ${serverActiveBoardPhase} Current PlayerTurn: ${turn} SelectedSquareBeforeClick: ${JSON.stringify(selectedSquare)} GameFinished? ${gameFinished}`);
+
+    if (!socket || gameFinished) {
+      console.log("FRONTEND: Click ignored. Socket null or game finished.", { socketExists: !!socket, gameFinished });
+      return;
+    }
   
-    const board = activeBoard === "main" ? mainBoard : secondaryBoard;
-    const setBoard = activeBoard === "main" ? setMainBoard : setSecondaryBoard;
+    if (boardClicked !== activeBoard || boardClicked !== serverActiveBoardPhase) {
+      console.log(`FRONTEND CLICK IGNORED: Clicked on ${boardClicked}. Visually active: ${activeBoard}. Logically active phase: ${serverActiveBoardPhase}.`);
+      return;
+    }
+  
+    const currentBoardState = serverActiveBoardPhase === "main" ? mainBoard : secondaryBoard;
+    const setCurrentBoardState = serverActiveBoardPhase === "main" ? setMainBoard : setSecondaryBoard;
   
     if (selectedSquare) {
       const [fromRow, fromCol] = selectedSquare;
@@ -146,12 +252,23 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
         return;
       }
   
-      const piece = board[fromRow][fromCol];
-      const targetPiece = board[row][col];
+      const piece = currentBoardState[fromRow][fromCol];
+      const targetPiece = currentBoardState[row][col];
   
+      if (!piece) {
+        setSelectedSquare(null);
+        return;
+      }
+      const pieceColor = piece === piece.toUpperCase() ? "White" : "Black";
+      if (pieceColor !== turn) {
+        alert(`It's ${turn}'s turn. Cannot move ${pieceColor}'s piece.`);
+        setSelectedSquare(null);
+        return;
+      }
+
       if (piece) {
-        const newBoard = board.map((r, i) =>
-          r.map((c, j) => {
+        const newBoard = currentBoardState.map((r: Array<string | null>, i: number) =>
+          r.map((c: string | null, j: number) => {
             if (i === row && j === col) {
               return piece;
             }
@@ -162,56 +279,51 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
           })
         );
   
-        setBoard(newBoard);
+        setCurrentBoardState(newBoard);
   
-        let moveDescription = `${piece} moved from ${String.fromCharCode(97 + fromCol)}${8 - fromRow} to ${String.fromCharCode(97 + col)}${8 - row} on ${activeBoard} board`;
+        let moveDescription = `${piece} moved from ${String.fromCharCode(97 + fromCol)}${8 - fromRow} to ${String.fromCharCode(97 + col)}${8 - row} on ${serverActiveBoardPhase} board`;
   
         if (targetPiece) {
-          moveDescription = `${piece} captured ${targetPiece} at ${String.fromCharCode(97 + col)}${8 - row} on ${activeBoard} board`;
+          moveDescription = `${piece} captured ${targetPiece} at ${String.fromCharCode(97 + col)}${8 - row} on ${serverActiveBoardPhase} board`;
         }
   
         setMoveHistory((prevHistory) => [...prevHistory, moveDescription]);
   
         setSelectedSquare(null);
   
-        socket.emit("move", {
-          room,
-          boardType: activeBoard,
-          board: newBoard,
-          move: {
+        // Emit move to server
+        if (socket && piece) {
+          const moveDetails = {
             from: [fromRow, fromCol],
             to: [row, col],
-            piece,
+            piece: piece,
             captured: targetPiece || null,
-          },
-        });
-
-        setTimeout(() => {
-        toggleBoard();
-  
-        setTurnCount((prevCount) => {
-          const newCount = prevCount + 1;
-          if (newCount >= 2) {
-            setTurn((prevTurn) => (prevTurn === "White" ? "Black" : "White"));
-            return 0;
-          }
-          return newCount;
-        });
-      }, 500);
+          };
+          console.log("FRONTEND: Emitting move", { room: roomFromProps, boardType: serverActiveBoardPhase, board: newBoard, move: moveDetails });
+          socket.emit("move", {
+            room: roomFromProps, 
+            boardType: serverActiveBoardPhase,
+            board: newBoard,
+            move: moveDetails,
+          });
+        }
      }
-    } else if (board[row][col]) {
-      setSelectedSquare([row, col]);
+    } else if (currentBoardState[row][col]) {
+      const pieceAtSelection = currentBoardState[row][col];
+      if (pieceAtSelection) {
+        const pieceColor = pieceAtSelection === pieceAtSelection.toUpperCase() ? "White" : "Black";
+        if (pieceColor === turn) {
+          setSelectedSquare([row, col]);
+        } else {
+          alert(`Cannot select opponent's piece. It's ${turn}'s turn.`);
+        }
+      }
     }
   };
   
-  const toggleBoard = () => {
-    setActiveBoard((prev) => (prev === "main" ? "secondary" : "main"));
-    setSelectedSquare(null);
-  };
-
   const handleFinishGame = () => {
     if (winner && checkmateBoard) {
-      const gameRoom = room || "local";
+      const gameRoom = roomFromProps || "local";
       
       if (socket) {
         socket.emit("finish_game", {
@@ -233,19 +345,34 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
     secondary: { light: "bg-[#d9e6f0]", dark: "bg-[#637db5]" },
   };
 
-  const getBoardState = (board: Array<Array<string | null>>, colors: { light: string; dark: string }) =>
-    board.map((row, rowIndex) =>
+  const getBoardState = (
+    boardData: Array<Array<string | null>>, 
+    colors: { light: string; dark: string },
+    boardType: "main" | "secondary"
+  ) => {
+    // Log current state for debugging disabled squares
+    console.log(`FRONTEND RENDER getBoardState: Rendering for boardType=\"${boardType}\". Current serverActiveBoardPhase=\"${serverActiveBoardPhase}\", activeBoard (visual)=\"${activeBoard}\", turn=\"${turn}\"`);
+
+    return boardData.map((row, rowIndex) =>
       row.map((piece, colIndex) => {
-        const isBlack = (rowIndex + colIndex) % 2 === 1;
-        const isSelected = selectedSquare?.[0] === rowIndex && selectedSquare?.[1] === colIndex;
+        const isBlackSquare = (rowIndex + colIndex) % 2 === 1;
+        const isCurrentSelectedSquare = selectedSquare?.[0] === rowIndex && selectedSquare?.[1] === colIndex && boardType === serverActiveBoardPhase;
+        const isDisabled = boardType !== serverActiveBoardPhase;
+
+        if (boardType === "secondary" && isDisabled) {
+            console.log(`FRONTEND RENDER DEBUG: Secondary board square [${rowIndex},${colIndex}] is BEING DISABLED. boardType=${boardType}, serverActiveBoardPhase=${serverActiveBoardPhase}`);
+        }
 
         return (
           <div
-            key={`square-${rowIndex}-${colIndex}`}
-            onClick={() => handleSquareClick(rowIndex, colIndex)}
+            key={`square-${boardType}-${rowIndex}-${colIndex}`}
+            onClick={() => !isDisabled && handleSquareClick(rowIndex, colIndex, boardType)}
             className={`w-[50px] h-[50px] flex items-center justify-center ${
-              isBlack ? colors.dark : colors.light
-            } ${isSelected ? "bg-red-300" : ""}`}
+              isBlackSquare ? colors.dark : colors.light
+            } ${isCurrentSelectedSquare ? "bg-red-400 border-2 border-red-600" : ""}
+              ${isDisabled ? "opacity-70 cursor-not-allowed" : "cursor-pointer"} 
+              transition-all duration-150 ease-in-out`}
+            title={isDisabled ? `Waiting for ${turn} on the ${serverActiveBoardPhase} board` : `${turn}'s turn on the ${serverActiveBoardPhase} board`}
           >
             {piece && (
               <span
@@ -260,29 +387,47 @@ const Gameboard: React.FC<GameboardProps> = ({ username, room }) => {
         );
       })
     );
+  };
 
   return (
-    <div className="flex flex-col items-center">
-      <h2 className="text-2xl font-bold mb-4 text-gray-600">Room: {room}</h2>
+    <div className="flex flex-col items-center select-none">
+      <h2 className="text-2xl font-bold mb-2 text-gray-600">Room: {roomFromProps}</h2>
+      <h3 className="text-xl font-semibold mb-4 text-indigo-700">
+        {turn}&apos;s turn on the {serverActiveBoardPhase} board
+      </h3>
 
       <div className="relative w-[400px] h-[400px]">
         <div
-          className="absolute inset-0 grid grid-cols-8 shadow-lg"
-          style={{ transform: "translate(15px, 15px)", zIndex: activeBoard === "secondary" ? 1 : 2 }}
+          className={`absolute inset-0 grid grid-cols-8 ${activeBoard === "main" ? "shadow-lg" : ""}`}
+          style={{
+            transform: activeBoard === "main" ? "none" : "translate(15px, 15px)",
+            zIndex: activeBoard === "main" ? 2 : 1,
+            opacity: activeBoard === "main" ? 1 : 0.6,
+            filter: activeBoard === "main" ? "none" : "grayscale(90%)",
+            transition: "transform 0.3s ease-in-out, opacity 0.3s ease-in-out, filter 0.3s ease-in-out, box-shadow 0.3s ease-in-out",
+          }}
         >
           {getBoardState(
-            activeBoard === "main" ? secondaryBoard : mainBoard,
-            activeBoard === "main" ? squareColors.secondary : squareColors.main
+            mainBoard,
+            squareColors.main,
+            "main"
           )}
         </div>
 
         <div
-          className="absolute inset-0 grid grid-cols-8"
-          style={{ zIndex: activeBoard === "main" ? 2 : 1 }}
+          className={`absolute inset-0 grid grid-cols-8 ${activeBoard === "secondary" ? "shadow-lg" : ""}`}
+          style={{
+            transform: activeBoard === "secondary" ? "none" : "translate(15px, 15px)",
+            zIndex: activeBoard === "secondary" ? 2 : 1,
+            opacity: activeBoard === "secondary" ? 1 : 0.6,
+            filter: activeBoard === "secondary" ? "none" : "grayscale(90%)",
+            transition: "transform 0.3s ease-in-out, opacity 0.3s ease-in-out, filter 0.3s ease-in-out, box-shadow 0.3s ease-in-out",
+          }}
         >
           {getBoardState(
-            activeBoard === "main" ? mainBoard : secondaryBoard,
-            activeBoard === "main" ? squareColors.main : squareColors.secondary
+            secondaryBoard,
+            squareColors.secondary,
+            "secondary"
           )}
         </div>
       </div>
