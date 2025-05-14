@@ -1,6 +1,6 @@
 import React from "react";
 import { useRouter } from "next/router";
-import { Button } from "@nextui-org/react";
+import { Button } from "@heroui/react";
 
 const ReturnToMainMenu: React.FC = () => {
   const router = useRouter();

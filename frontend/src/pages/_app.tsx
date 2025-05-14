@@ -1,15 +1,20 @@
 import * as React from "react";
-import { NextUIProvider } from "@nextui-org/react";
+import { HeroUIProvider } from "@heroui/react";
 import { SessionProvider } from "next-auth/react";
 import "../styles/globals.css";
 import type { AppProps } from "next/app";
+import { useRouter } from 'next/router';
 
-export default function MyApp({ Component, pageProps }: AppProps) {
+function MyApp({ Component, pageProps: { session, ...pageProps } }: AppProps) {
+  const router = useRouter();
+
   return (
-    <SessionProvider session={pageProps.session}>
-      <NextUIProvider>
+    <SessionProvider session={session}>
+      <HeroUIProvider navigate={router.push}>
         <Component {...pageProps} />
-      </NextUIProvider>
+      </HeroUIProvider>
     </SessionProvider>
   );
 }
+
+export default MyApp;

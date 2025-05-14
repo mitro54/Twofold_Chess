@@ -81,10 +81,46 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
   const [moveHistory, setMoveHistory] = useState<string[]>([]);
   const [gameFinished, setGameFinished] = useState(false);
   const [showFinishModal, setShowFinishModal] = useState(false);
+  const [showCheckmateModal, setShowCheckmateModal] = useState(false);
+  const [gameEndMessage, setGameEndMessage] = useState("");
   const [winner, setWinner] = useState<"White" | "Black" | null>(null);
   const [checkmateBoard, setCheckmateBoard] = useState<"main" | "secondary" | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
   const visualUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Function to automatically save the game when it ends
+  const handleAutoSaveGameEnd = async (currentWinner: "White" | "Black" | null, endedOnBoard: "main" | "secondary", currentMoves: string[]) => {
+    const gameRoom = roomFromProps || "local_game_room"; // Ensure consistent room ID
+    const payload = {
+      room: gameRoom,
+      winner: currentWinner,
+      board: endedOnBoard, 
+      moves: currentMoves,
+      status: "completed"
+    };
+    console.log("FRONTEND: Attempting to automatically save game to history:", JSON.parse(JSON.stringify(payload)));
+
+    const backendBaseUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5001";
+    const cleanBackendBaseUrl = backendBaseUrl.replace(/\/$/, '');
+
+    try {
+      const response = await fetch(`${cleanBackendBaseUrl}/api/games`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("FRONTEND ERROR: API auto save_game failed.", { status: response.status, error: errorText, payload });
+        // alert(`Failed to auto-save game: ${errorText}`); // Optional: alert user
+      } else {
+        console.log("FRONTEND: Game auto-saved successfully.", { payload });
+      }
+    } catch (error) {
+      console.error("FRONTEND ERROR: Error calling API for auto save_game:", { error, payload });
+      // alert(`Error auto-saving game: ${error}`); // Optional: alert user
+    }
+  };
 
   useEffect(() => {
     if (activeBoard === serverActiveBoardPhase) {
@@ -169,50 +205,55 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
       setCheckmateBoard(null);      // Clear any checkmate board status
     });
   
-    newSocketInstance.on("game_update", (data: GameStateData) => {
+    newSocketInstance.on("game_update", async (data: GameStateData) => {
       if (!data || !data.mainBoard || !data.secondaryBoard) {
         console.error("FRONTEND ERROR: Invalid game_update data received:", data);
         return;
       }
-      console.log("FRONTEND: game_update received (partial update after move):", JSON.parse(JSON.stringify(data)));
+      console.log("FRONTEND: game_update received:", JSON.parse(JSON.stringify(data)));
     
       const newMainBoard = data.mainBoard;
       const newSecondaryBoard = data.secondaryBoard;
       const newTurn = data.turn || "White";
       const newActivePhase = data.active_board_phase || "main";
+      const newMoves = data.moves || [];
 
       setMainBoard(newMainBoard);
       setSecondaryBoard(newSecondaryBoard);
       setTurn(newTurn);
       setServerActiveBoardPhase(newActivePhase);
-      setMoveHistory(data.moves || []);
+      setMoveHistory(newMoves);
       setSelectedPieceSquare(null);
       setPossibleMoves([]);
 
-      // Check for game end conditions if the game is not already marked as finished
       if (!gameFinished) {
         const boardToCheck = newActivePhase === "main" ? newMainBoard : newSecondaryBoard;
         const opponent = newTurn === "White" ? "Black" : "White";
 
+        let gameHasEnded = false;
+        let endMessage = "";
+        let determinedWinner: "White" | "Black" | null = null;
+
         if (isCheckmate(boardToCheck, newTurn)) {
-          console.log(`FRONTEND: Checkmate! ${opponent} wins on ${newActivePhase} board.`);
-          alert(`Checkmate! ${opponent} wins on the ${newActivePhase} board.`);
-          setWinner(opponent);
+          determinedWinner = opponent;
+          endMessage = `Checkmate! ${opponent} wins on the ${newActivePhase} board.`;
+          gameHasEnded = true;
+        } else if (isStalemate(boardToCheck, newTurn)) {
+          determinedWinner = null; // Draw
+          endMessage = `Stalemate on the ${newActivePhase} board. The game is a draw.`;
+          gameHasEnded = true;
+        }
+
+        if (gameHasEnded) {
+          console.log(`FRONTEND: Game ended. Message: ${endMessage}`);
+          // Attempt to auto-save before showing modal
+          await handleAutoSaveGameEnd(determinedWinner, newActivePhase, newMoves);
+
+          setGameEndMessage(endMessage);
+          setWinner(determinedWinner);
           setCheckmateBoard(newActivePhase);
           setGameFinished(true);
-          // Optionally, trigger finish modal or auto-save game
-        } else if (isStalemate(boardToCheck, newTurn)) {
-          console.log(`FRONTEND: Stalemate on ${newActivePhase} board.`);
-          alert(`Stalemate on the ${newActivePhase} board. The game is a draw.`);
-          setWinner(null); // Or a specific "Draw" state
-          setCheckmateBoard(newActivePhase); // Indicate where stalemate occurred
-          setGameFinished(true);
-        } else {
-          // Optional: Check for simple check status to display to the user
-          // if (isKingInCheck(boardToCheck, newTurn)) {
-          //   console.log(`FRONTEND: ${newTurn} is in check on the ${newActivePhase} board.`);
-          //   // Potentially set a state to display "Check!" in the UI
-          // }
+          setShowCheckmateModal(true); 
         }
       }
     });    
@@ -245,35 +286,23 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
         visualUpdateTimeoutRef.current = null;
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [usernameFromProps, roomFromProps, gameFinished]);
 
   const resetBoard = async () => {
     console.log("FRONTEND: Resetting board for room:", roomFromProps);
     if (socket) {
       socket.emit("reset", { room: roomFromProps });
-      console.log("FRONTEND: socket.emit('reset') called for room:", roomFromProps);
     } else {
       console.warn("FRONTEND: Reset called but socket is null.");
     }
-
-    const backendBaseUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5001";
-    // Ensure the base URL doesn't end with a trailing slash before appending /api/reset
-    const cleanBackendBaseUrl = backendBaseUrl.replace(/\/$/, ''); 
-
-    try {
-      const response = await fetch(`${cleanBackendBaseUrl}/api/reset`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ room: roomFromProps }),
-      });
-      if (!response.ok) {
-        console.error("FRONTEND ERROR: API reset failed", await response.text());
-      } else {
-        console.log("FRONTEND: API /api/reset call successful for room:", roomFromProps);
-      }
-    } catch (error) {
-      console.error("FRONTEND ERROR: Error calling API reset board:", error);
-    }
+    setShowCheckmateModal(false);
+    setGameEndMessage("");
+    // The server's "game_reset" or "game_state" event should reset other game states like
+    // gameFinished, winner, checkmateBoard, mainBoard, secondaryBoard, turn, etc.
+    // No need to call the /api/reset fetch here if socket.emit("reset") triggers a server-side reset
+    // that then emits game_reset to all clients. The existing API call might be redundant
+    // if the socket 'reset' event already correctly resets state via a game_reset emission.
   };
 
   const handleSquareClick = (row: number, col: number, boardClicked: "main" | "secondary") => {
@@ -352,16 +381,17 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
       const gameRoom = roomFromProps || "local";
       
       if (socket) {
+        // This emits a finish_game event, backend then saves and emits game_reset
         socket.emit("finish_game", {
           room: gameRoom,
           winner,
-          board: checkmateBoard,
+          board: checkmateBoard, // The board where checkmate (manually decided) occurred
           moves: moveHistory,
         });
   
-        setShowFinishModal(false);
-        setGameFinished(true);
-        resetBoard();
+        setShowFinishModal(false); // Close the manual finish modal
+        // setGameFinished(true); // Backend will send game_reset which handles this
+        // resetBoard(); // Backend will send game_reset
       }
     }
   };
@@ -464,6 +494,29 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
           )}
         </div>
       </div>
+
+      {showCheckmateModal && (
+        <div className="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg shadow-lg text-center z-60 max-w-md mx-auto">
+            <h3 className="text-xl font-bold mb-4 text-gray-800">Game Over</h3>
+            <p className="mb-6 text-lg text-gray-700">{gameEndMessage}</p>
+            <div className="flex flex-col space-y-3 sm:flex-row sm:space-y-0 sm:space-x-3 justify-center">
+              <button
+                onClick={() => resetBoard()} 
+                className="px-6 py-3 bg-blue-500 text-white font-semibold rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 transition ease-in-out duration-150"
+              >
+                Play Again
+              </button>
+              {/* <button
+                onClick={() => resetBoard()} // Or a different quit action
+                className="px-6 py-3 bg-red-500 text-white font-semibold rounded-md hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50 transition ease-in-out duration-150"
+              >
+                Quit
+              </button> */}
+            </div>
+          </div>
+        </div>
+      )}
 
       {showFinishModal && (
   <div

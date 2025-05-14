@@ -1,4 +1,4 @@
-import { Button, Spacer } from "@nextui-org/react";
+import { Button, Spacer } from "@heroui/react";
 import { useState } from "react";
 import { useRouter } from "next/router";
 
