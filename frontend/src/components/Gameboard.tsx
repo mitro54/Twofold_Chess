@@ -117,7 +117,13 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
     boardType: 'main' | 'secondary';
   } | null>(null);
 
-  const [enPassantTarget, setEnPassantTarget] = useState<[number, number] | null>(null);
+  const [enPassantTarget, setEnPassantTarget] = useState<{
+    main: [number, number] | null;
+    secondary: [number, number] | null;
+  }>({
+    main: null,
+    secondary: null
+  });
 
   const [castlingRights,setCastlingRights] =
   useState<{ White:{K:boolean;Q:boolean}; Black:{K:boolean;Q:boolean} }|
@@ -238,7 +244,7 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
         setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
         setShowCheckmateModal(false);
         setRespondingToCheckBoard(data.is_responding_to_check_on_board || null);
-        setEnPassantTarget(data.en_passant_target ?? null);
+        setEnPassantTarget(data.en_passant_target ?? { main: null, secondary: null });
         setCastlingRights(
         data.castling_rights ?? { White: { K: true, Q: true },
         Black: { K: true, Q: true } }
@@ -282,7 +288,7 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
       setMainBoardOutcome(data.main_board_outcome || "active");
       setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
       setRespondingToCheckBoard(data.is_responding_to_check_on_board || null);
-      setEnPassantTarget(data.en_passant_target ?? null);
+      setEnPassantTarget(data.en_passant_target ?? { main: null, secondary: null });
       setCastlingRights(data.castling_rights ?? null);
 
 
@@ -315,7 +321,7 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
       setMainBoardOutcome(data.main_board_outcome || "active");
       setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
       setRespondingToCheckBoard(data.is_responding_to_check_on_board || null);
-      setEnPassantTarget(data.en_passant_target ?? null);
+      setEnPassantTarget(data.en_passant_target ?? { main: null, secondary: null });
       
       setSelectedPieceSquare(null);
       setPossibleMoves([]);
@@ -510,9 +516,9 @@ const handleSquareClick = (
       isPawn &&
       targetId === null &&
       isDiagonal &&
-      enPassantTarget &&
-      row === enPassantTarget[0] &&
-      col === enPassantTarget[1];
+      enPassantTarget[serverActiveBoardPhase] &&
+      row === enPassantTarget[serverActiveBoardPhase][0] &&
+      col === enPassantTarget[serverActiveBoardPhase][1];
 
     // pawn promotion… (unchanged)
     if (isPawn && lastRank && possibleMoves.some((m) => m.row === row && m.col === col)) {
@@ -578,7 +584,7 @@ const handleSquareClick = (
       row,
       col,
       turn,
-      enPassantTarget
+      enPassantTarget[serverActiveBoardPhase]
     );
 
     // ---- Castling availability (king only) ----

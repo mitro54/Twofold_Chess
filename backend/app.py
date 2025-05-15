@@ -56,6 +56,16 @@ games_collection = db.games
 ######################### UTILITIES #########################
 
 
+# ─── en-passant helper ────────────────────────────────────────────────
+def _init_ep_dict(game_doc):
+    """
+    Ensure game_doc['en_passant_target'] is a dict
+        {"main": None | [r,c], "secondary": None | [r,c]}
+    """
+    if not isinstance(game_doc.get("en_passant_target"), dict):
+        game_doc["en_passant_target"] = {"main": None, "secondary": None}
+# ──────────────────────────────────────────────────────────────────────
+
 def serialize_game_state(game_state):
     if "_id" in game_state:
         game_state["_id"] = str(game_state["_id"])
@@ -124,7 +134,7 @@ def reset_game():
         "game_over": False,
         "is_responding_to_check_on_board": None,
         "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
-        "en_passant_target": None,
+        "en_passant_target": {"main": None, "secondary": None},
     }
     
     games_collection.update_one(
@@ -187,7 +197,7 @@ def get_game_state():
             "game_over": False,
             "is_responding_to_check_on_board": None,
             "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
-            "en_passant_target": None,
+            "en_passant_target": {"main": None, "secondary": None},
         }
         games_collection.insert_one({"room": room, **game_state})
         print(f"New game state created for room {room}: {game_state}")
@@ -203,14 +213,14 @@ def get_game_state():
                     "turn": current_turn,
                     "is_responding_to_check_on_board": None, # Ensure it's added on migration
                     "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
-                    "en_passant_target": None
+                    "en_passant_target": {"main": None, "secondary": None}
                 }}
             )
             game_state["active_board_phase"] = "main"
             game_state["turn"] = current_turn
             game_state["is_responding_to_check_on_board"] = None
             game_state["castling_rights"] = {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}}
-            game_state["en_passant_target"] = None
+            game_state["en_passant_target"] = {"main": None, "secondary": None}
 
     if not game_state: # Should be extremely rare
         print(f"CRITICAL: game_state for room {room} is None after create/find attempt.")
@@ -656,7 +666,7 @@ def on_join(data):
             "game_over": False,
             "is_responding_to_check_on_board": None,
             "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
-            "en_passant_target": None,
+            "en_passant_target": {"main": None, "secondary": None},
         }
         games_collection.insert_one(game_state)
         print(f"New game state created for room {room}: {game_state}")
@@ -672,14 +682,14 @@ def on_join(data):
                     "turn": current_turn,
                     "is_responding_to_check_on_board": None, # Ensure it's added on migration
                     "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
-                    "en_passant_target": None
+                    "en_passant_target": {"main": None, "secondary": None}
                 }}
             )
             game_state["active_board_phase"] = "main"
             game_state["turn"] = current_turn
             game_state["is_responding_to_check_on_board"] = None
             game_state["castling_rights"] = {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}}
-            game_state["en_passant_target"] = None
+            game_state["en_passant_target"] = {"main": None, "secondary": None}
 
     if not game_state: # Should be extremely rare
         print(f"CRITICAL: game_state for room {room} is None after create/find attempt.")
@@ -732,7 +742,7 @@ def on_reset(data):
         "game_over": False,
         "is_responding_to_check_on_board": None,
         "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
-        "en_passant_target": None,
+        "en_passant_target": {"main": None, "secondary": None},
     }
     
     # Ensure secondaryBoard is a distinct copy
@@ -763,6 +773,9 @@ def on_move(data):
         emit("move_error", {"message": "Game not found."})
         return
     game_doc = dict(game_doc_cursor)
+
+    # make sure the en passant field exists
+    _init_ep_dict(game_doc)
 
     if game_doc.get("game_over", False):
         emit("move_error", {"message": "Game is already over."})
@@ -797,7 +810,7 @@ def on_move(data):
 
     # --- Use python-chess for move validation and application ---
     castling_rights = game_doc.get("castling_rights", {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}})
-    en_passant_target = game_doc.get("en_passant_target")
+    en_passant_target = game_doc["en_passant_target"][board_type_played]
     board = arr_to_board(current_board_state, turn=current_player_color, castling_rights=castling_rights, ep_target=en_passant_target)
 
     # ---------- build (and/or translate) the intended move ----------
@@ -844,18 +857,24 @@ def on_move(data):
     # Save board state before move for capture detection
     prev_board_arr = [row[:] for row in current_board_state]
 
+    # -------------------------------------------------------------
+    # Detect whether this move is an en-passant capture *before*
+    # we push it, because board.push() resets ep_square.
+    # -------------------------------------------------------------
+    is_ep_capture = board.is_en_passant(uci_move)
+
     # Apply the move
     board.push(uci_move)
     logger.debug(f"Board FEN after move: {board.fen()}")
 
-    # Update en passant target
+    # Update en passant target for the current board only
     ep_square = board.ep_square
     if ep_square is not None:
         ep_row = 7 - (ep_square // 8)
         ep_col = ep_square % 8
-        game_doc["en_passant_target"] = [ep_row, ep_col]
+        game_doc["en_passant_target"][board_type_played] = [ep_row, ep_col]
     else:
-        game_doc["en_passant_target"] = None
+        game_doc["en_passant_target"][board_type_played] = None
 
     # Update castling rights
     cr = {"White": {"K": board.has_kingside_castling_rights(chess.WHITE), "Q": board.has_queenside_castling_rights(chess.WHITE)},
@@ -868,23 +887,18 @@ def on_move(data):
 
     # --- Asymmetric Capture Logic (robust) ---
     if board_type_played == "main":
-        # En passant: remove the pawn passed over
-        if board.is_en_passant(uci_move):
-            # the pawn that is taken en-passant sat on the FROM-rank, TO-file
-            captured_r = from_r                   # same rank your pawn started on
-            captured_c = to_c                     # file it moved to
-
+        # En-passant: remove the *same-ID* pawn on the other board
+        if is_ep_capture:
+            captured_r = from_r               # rank pawn started from
+            captured_c = to_c                 # file it moved to
             captured_piece = prev_board_arr[captured_r][captured_c]
 
-            if captured_piece:                    # should always be true
-                print(f"[DEBUG] EP captured piece ID: {captured_piece}")
-
-                # remove *that ID* wherever it lives on the secondary board
+            if captured_piece:
+                sec = game_doc["secondaryBoard"]
                 for r in range(8):
                     for c in range(8):
-                        if game_doc["secondaryBoard"][r][c] == captured_piece:
-                            game_doc["secondaryBoard"][r][c] = None
-                            print(f"[DEBUG] Removed EP pawn {captured_piece} from secondary at ({r},{c})")
+                        if sec[r][c] == captured_piece:
+                            sec[r][c] = None
                             break
                     else:
                         continue
@@ -912,23 +926,18 @@ def on_move(data):
             else:
                 print(f"[DEBUG] No captured piece found at (row={to_r}, col={to_c}) on main board.")
     elif board_type_played == "secondary":
-        # En passant: remove the pawn passed over
-        if board.is_en_passant(uci_move):
-            # the pawn that is taken en-passant sat on the FROM-rank, TO-file
-            captured_r = from_r                   # same rank your pawn started on
-            captured_c = to_c                     # file it moved to
-
+        # En-passant: remove the *same-ID* pawn on the other board
+        if is_ep_capture:
+            captured_r = from_r               # rank pawn started from
+            captured_c = to_c                 # file it moved to
             captured_piece = prev_board_arr[captured_r][captured_c]
 
-            if captured_piece:                    # should always be true
-                print(f"[DEBUG] EP captured piece ID: {captured_piece}")
-
-                # remove *that ID* wherever it lives on the main board
+            if captured_piece:
+                sec = game_doc["mainBoard"]
                 for r in range(8):
                     for c in range(8):
-                        if game_doc["mainBoard"][r][c] == captured_piece:
-                            game_doc["mainBoard"][r][c] = None
-                            print(f"[DEBUG] Removed EP pawn {captured_piece} from main at ({r},{c})")
+                        if sec[r][c] == captured_piece:
+                            sec[r][c] = None
                             break
                     else:
                         continue
