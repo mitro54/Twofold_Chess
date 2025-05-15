@@ -8,7 +8,6 @@ import {
   Position,
   Piece as ChessPieceType,
   Board as ChessBoardType,
-  PieceInfo,
   // isCheckmate, // Keep for potential UI hint if king is in check, or for local validation before send
   // isStalemate, // Keep for potential UI hint
 } from "../utils/chessLogic";
@@ -25,6 +24,8 @@ interface GameStateData {
   secondary_board_outcome?: "active" | "white_wins" | "black_wins" | "draw_stalemate";
   game_over?: boolean;
   is_responding_to_check_on_board?: "main" | "secondary" | null;
+  en_passant_target?: [number, number] | null;
+  castling_rights?: { White:{K:boolean;Q:boolean}; Black:{K:boolean;Q:boolean} };
 }
 
 interface MoveErrorData {
@@ -82,7 +83,7 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
   const [selectedPieceSquare, setSelectedPieceSquare] = useState<Position | null>(null);
   const [possibleMoves, setPossibleMoves] = useState<Position[]>([]);
   const [turn, setTurn] = useState<"White" | "Black">("White");
-
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [moveHistory, setMoveHistory] = useState<string[]>([]);
   const [gameFinished, setGameFinished] = useState(false);
   const [showFinishModal, setShowFinishModal] = useState(false);
@@ -95,6 +96,95 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
   const [mainBoardOutcome, setMainBoardOutcome] = useState<string>("active");
   const [secondaryBoardOutcome, setSecondaryBoardOutcome] = useState<string>("active");
   const [respondingToCheckBoard, setRespondingToCheckBoard] = useState<"main" | "secondary" | null>(null);
+
+  const [pendingPromotion, setPendingPromotion] = useState<{
+    from: Position;
+    to: Position;
+    piece: string;
+    boardType: "main" | "secondary";
+  } | null>(null);
+  const [showPromotionModal, setShowPromotionModal] = useState(false);
+  const [promotionChoices] = useState([
+    { label: "Queen", value: "Q" },
+    { label: "Rook", value: "R" },
+    { label: "Bishop", value: "B" },
+    { label: "Knight", value: "N" },
+  ]);
+
+  const [castlingCandidate, setCastlingCandidate] = useState<{
+    kingPos: Position;
+    rooks: { pos: Position; type: 'kingside' | 'queenside' }[];
+    boardType: 'main' | 'secondary';
+  } | null>(null);
+
+  const [enPassantTarget, setEnPassantTarget] = useState<[number, number] | null>(null);
+
+  const [castlingRights,setCastlingRights] =
+  useState<{ White:{K:boolean;Q:boolean}; Black:{K:boolean;Q:boolean} }|
+           null>(null);
+
+
+  // Helper to determine castling rights and eligible rooks for the selected king
+  const getCastlingOptions = (
+    board: ChessBoardType,
+    kingRow: number,
+    kingCol: number,
+    player: 'White' | 'Black',
+    rights: { K: boolean; Q: boolean } | null
+  ): { pos: Position; type: 'kingside' | 'queenside' }[] => {
+    // if the server hasn't sent rights yet, allow both sides for now
+    if (!rights) rights = { K: true, Q: true };
+  
+    const opts: { pos: Position; type: 'kingside' | 'queenside' }[] = [];
+    const homeRank = player === 'White' ? 7 : 0;
+  
+    // king must be on e-file of its home rank
+    if (kingRow !== homeRank || kingCol !== 4) {
+      console.log(`[CASTLING DEBUG] King not on home square: row=${kingRow}, col=${kingCol}, expected row=${homeRank}, col=4`);
+      return opts;
+    }
+  
+    // Print all relevant info for kingside
+    console.log('[CASTLING DEBUG] Checking kingside:', {
+      rightsK: rights.K,
+      rook: board[homeRank][7],
+      rookInfo: getPieceInfo(board[homeRank][7]),
+      between5: board[homeRank][5],
+      between6: board[homeRank][6],
+    });
+    // -------- kingside --------
+    if (
+      rights.K &&
+      board[homeRank][7] &&
+      ['Rook', 'R'].includes(getPieceInfo(board[homeRank][7])?.type) &&
+      !board[homeRank][5] && !board[homeRank][6]
+    ) {
+      opts.push({ pos: { row: homeRank, col: 7 }, type: 'kingside' });
+    }
+  
+    // Print all relevant info for queenside
+    console.log('[CASTLING DEBUG] Checking queenside:', {
+      rightsQ: rights.Q,
+      rook: board[homeRank][0],
+      rookInfo: getPieceInfo(board[homeRank][0]),
+      between1: board[homeRank][1],
+      between2: board[homeRank][2],
+      between3: board[homeRank][3],
+    });
+    // -------- queenside -------
+    if (
+      rights.Q &&
+      board[homeRank][0] &&
+      ['Rook', 'R'].includes(getPieceInfo(board[homeRank][0])?.type) &&
+      !board[homeRank][1] && !board[homeRank][2] && !board[homeRank][3]
+    ) {
+      opts.push({ pos: { row: homeRank, col: 0 }, type: 'queenside' });
+    }
+  
+    console.log(`[CASTLING DEBUG] getCastlingOptions for ${player} at (${kingRow},${kingCol}) rights=`, rights, 'opts=', opts);
+    return opts;
+  };
+  
 
   useEffect(() => {
     if (activeBoard === serverActiveBoardPhase) {
@@ -148,6 +238,11 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
         setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
         setShowCheckmateModal(false);
         setRespondingToCheckBoard(data.is_responding_to_check_on_board || null);
+        setEnPassantTarget(data.en_passant_target ?? null);
+        setCastlingRights(
+        data.castling_rights ?? { White: { K: true, Q: true },
+        Black: { K: true, Q: true } }
+        );
       });
     }
     return () => {
@@ -155,12 +250,12 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
         socket.off("game_reset");
       }
     };
-  }, [socket]);
+  }, [socket]);  
 
   useEffect(() => {
     console.log(`FRONTEND: Initializing socket effect. Username: ${usernameFromProps}, Room: ${roomFromProps}`);
     const newSocketInstance = io(process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5001");
-    
+
     setSocket(newSocketInstance);
 
     console.log(`FRONTEND: Emitting 'join' for room: ${roomFromProps}`);
@@ -187,6 +282,9 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
       setMainBoardOutcome(data.main_board_outcome || "active");
       setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
       setRespondingToCheckBoard(data.is_responding_to_check_on_board || null);
+      setEnPassantTarget(data.en_passant_target ?? null);
+      setCastlingRights(data.castling_rights ?? null);
+
 
       if (data.game_over) {
         let endMsg = `Game Over.`;
@@ -217,9 +315,11 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
       setMainBoardOutcome(data.main_board_outcome || "active");
       setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
       setRespondingToCheckBoard(data.is_responding_to_check_on_board || null);
+      setEnPassantTarget(data.en_passant_target ?? null);
       
       setSelectedPieceSquare(null);
       setPossibleMoves([]);
+      setCastlingRights(data.castling_rights ?? null);
 
       if (data.game_over && !showCheckmateModal) {
         let endMsg = `Game Over.`;
@@ -242,7 +342,7 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
 
     newSocketInstance.on("move_error", (errorData: MoveErrorData) => {
       alert(`Error: ${errorData.message}`);
-    });
+    });    
 
     const handleKeyPress = (event: KeyboardEvent) => {
       if (event.code === "Space") {
@@ -319,93 +419,227 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
     }
   };
 
-  const handleSquareClick = (row: number, col: number, boardClicked: "main" | "secondary") => {
-    console.log(`FRONTEND: handleSquareClick triggered. ClickedBoard: ${boardClicked} Current ServerActivePhase: ${serverActiveBoardPhase} Current PlayerTurn: ${turn} SelectedSquareBeforeClick: ${JSON.stringify(selectedPieceSquare)} GameFinished? ${gameFinished}`);
+const handleSquareClick = (
+  row: number,
+  col: number,
+  boardClicked: "main" | "secondary"
+) => {
+  // Block all input if promotion modal is open
+  if (showPromotionModal) return;
 
-    const boardOutcome = boardClicked === "main" ? mainBoardOutcome : secondaryBoardOutcome;
-    if (boardOutcome !== "active") {
-      console.log(`FRONTEND CLICK IGNORED: Clicked on ${boardClicked} board which has outcome: ${boardOutcome}.`);
-      return;
-    }
+  /* ------------------------------------------------------------------ *
+   *      EARLY OUTS – same as before (trimmed for brevity)             *
+   * ------------------------------------------------------------------ */
+  const boardOutcome =
+    boardClicked === "main" ? mainBoardOutcome : secondaryBoardOutcome;
+  if (
+    boardOutcome !== "active" ||
+    !socket ||
+    gameFinished ||
+    boardClicked !== activeBoard ||
+    boardClicked !== serverActiveBoardPhase
+  ) {
+    return;
+  }
 
-    if (!socket || gameFinished) {
-      console.log("FRONTEND: Click ignored. Socket null or game finished.", { socketExists: !!socket, gameFinished });
-      return;
-    }
-  
-    if (boardClicked !== activeBoard || boardClicked !== serverActiveBoardPhase) {
-      console.log(`FRONTEND CLICK IGNORED: Clicked on ${boardClicked}. Visually active: ${activeBoard}. Logically active phase: ${serverActiveBoardPhase}.`);
-      return;
-    }
-  
-    const currentBoardState: ChessBoardType = serverActiveBoardPhase === "main" ? mainBoard : secondaryBoard;
-    const pieceAtClickedSquare: ChessPieceType = currentBoardState[row][col];
-    const pieceInfoAtClickedSquare: PieceInfo | null = getPieceInfo(pieceAtClickedSquare);
+  const currentBoardState: ChessBoardType =
+    serverActiveBoardPhase === "main" ? mainBoard : secondaryBoard;
+  const pieceAtSquare: ChessPieceType = currentBoardState[row][col];
+  const pieceInfo = getPieceInfo(pieceAtSquare);
+  console.log(`[DEBUG] Square clicked: row=${row}, col=${col}, board=${boardClicked}, pieceAtSquare=`, pieceAtSquare, ', getPieceInfo=', pieceInfo);
+  if (pieceInfo && pieceInfo.type === "King") {
+    console.log(`[DEBUG] King clicked at row=${row}, col=${col}, piece=`, pieceAtSquare, pieceInfo);
+  }
 
-    if (selectedPieceSquare) {
-      const { row: fromRow, col: fromCol } = selectedPieceSquare;
-      const selectedPieceId = currentBoardState[fromRow][fromCol];
+  /* ------------------------------------------------------------------ *
+   *                 1) SECOND TAP –- try to make a move                *
+   * ------------------------------------------------------------------ */
+  if (selectedPieceSquare) {
+    const { row: fromRow, col: fromCol } = selectedPieceSquare;
+    const selectedPieceId = currentBoardState[fromRow][fromCol];
 
-      if (possibleMoves.some(move => move.row === row && move.col === col)) {
-        const targetPieceId = currentBoardState[row][col];
+    /* ----------  a) CASTLING ---------------------------------------- */
+    if (
+      castlingCandidate &&
+      castlingCandidate.kingPos.row === fromRow &&
+      castlingCandidate.kingPos.col === fromCol
+    ) {
+      // recognise either the rook square *or* the king-destination square
+      const match =
+        castlingCandidate.rooks.find(
+          r => r.pos.row === row && r.pos.col === col
+        ) ||
+        // user clicked the empty destination square (g or c file)
+        (row === fromRow && (col === 6 || col === 2)
+          ? { type: col === 6 ? "kingside" : "queenside" }
+          : null);
 
-        if (socket && selectedPieceId) {
-          const moveDetails = {
-            from: [fromRow, fromCol],
-            to: [row, col],
+      if (match && socket && selectedPieceId) {
+        const kingTargetCol = match.type === "kingside" ? 6 : 2;
+        socket.emit("move", {
+          room: roomFromProps,
+          boardType: serverActiveBoardPhase,
+          board: currentBoardState,
+          move: {
+            from: [fromRow, fromCol],           // king start (e-file)
+            to:   [fromRow, kingTargetCol],     // e1→g1  or  e1→c1
             piece: selectedPieceId,
-            captured: targetPieceId || null,
-          };
-          console.log("FRONTEND: Emitting move", { room: roomFromProps, boardType: serverActiveBoardPhase, board: currentBoardState, move: moveDetails });
-          socket.emit("move", {
-            room: roomFromProps, 
-            boardType: serverActiveBoardPhase,
-            board: currentBoardState,
-            move: moveDetails,
-          });
-        }
+            captured: null,
+            castle: match.type,                 // "kingside" | "queenside"
+          },
+        });
+        setCastlingCandidate(null);
         setSelectedPieceSquare(null);
         setPossibleMoves([]);
-      } else if (pieceInfoAtClickedSquare && pieceInfoAtClickedSquare.color === turn) {
-        const newPossibleMoves = getValidMoves(currentBoardState, pieceAtClickedSquare, row, col, turn);
-        setSelectedPieceSquare({ row, col });
-        setPossibleMoves(newPossibleMoves);
-      } else {
-        setSelectedPieceSquare(null);
-        setPossibleMoves([]);
+        return;
       }
-    } else if (pieceInfoAtClickedSquare) {
-      if (pieceInfoAtClickedSquare.color === turn) {
-        const validMovesArray = getValidMoves(currentBoardState, pieceAtClickedSquare, row, col, turn);
-        setSelectedPieceSquare({ row, col });
-        setPossibleMoves(validMovesArray);
-        console.log("FRONTEND: Selected piece:", pieceAtClickedSquare, "at", {row, col}, "Possible moves:", validMovesArray);
-      } else {
-        console.log(`FRONTEND: Clicked opponent's piece (${pieceAtClickedSquare}) or invalid piece. Turn: ${turn}`);
-        setSelectedPieceSquare(null);
-        setPossibleMoves([]);
-      }
-    } else {
+    }
+
+    /* ----------  b) EN PASSANT  &  ORDINARY MOVES (unchanged) ------- */
+    const targetId = currentBoardState[row][col];
+    const isPawn =
+      selectedPieceId && getPieceInfo(selectedPieceId)?.type === "P";
+    const movingPieceColour = getPieceInfo(selectedPieceId)?.color as "White"|"Black";
+    const lastRank = movingPieceColour === "White" ? row === 0 : row === 7;
+    const isDiagonal =
+      fromCol !== col &&
+      Math.abs(fromCol - col) === 1 &&
+      ((turn === "White" && row === fromRow - 1) ||
+        (turn === "Black" && row === fromRow + 1));
+    const isEnPassant =
+      isPawn &&
+      targetId === null &&
+      isDiagonal &&
+      enPassantTarget &&
+      row === enPassantTarget[0] &&
+      col === enPassantTarget[1];
+
+    // pawn promotion… (unchanged)
+    if (isPawn && lastRank && possibleMoves.some((m) => m.row === row && m.col === col)) {
+      setPendingPromotion({
+        from: { row: fromRow, col: fromCol },
+        to: { row, col },
+        piece: selectedPieceId,
+        boardType: boardClicked,
+      });
+      setShowPromotionModal(true);
       setSelectedPieceSquare(null);
       setPossibleMoves([]);
+      return;
     }
-  };
-  
-  const handleFinishGame = () => {
-    if (winner && checkmateBoard) {
-      const gameRoom = roomFromProps || "local";
-      
-      if (socket) {
-        socket.emit("finish_game", {
-          room: gameRoom,
-          winner,
-          board: checkmateBoard,
-          moves: moveHistory,
-        });
-  
-        setShowFinishModal(false);
+
+    // en-passant
+    if (isEnPassant) {
+      socket.emit("move", {
+        room: roomFromProps,
+        boardType: serverActiveBoardPhase,
+        board: currentBoardState,
+        move: {
+          from: [fromRow, fromCol],
+          to: [row, col],
+          piece: selectedPieceId,
+          captured: null,
+          en_passant: true,
+        },
+      });
+      setSelectedPieceSquare(null);
+      setPossibleMoves([]);
+      return;
+    }
+
+    // ordinary capture / quiet move
+    if (possibleMoves.some((m) => m.row === row && m.col === col)) {
+      socket.emit("move", {
+        room: roomFromProps,
+        boardType: serverActiveBoardPhase,
+        board: currentBoardState,
+        move: {
+          from: [fromRow, fromCol],
+          to: [row, col],
+          piece: selectedPieceId,
+          captured: targetId || null,
+        },
+      });
+    }
+    setSelectedPieceSquare(null);
+    setPossibleMoves([]);
+    setCastlingCandidate(null);
+    return;
+  }
+
+  /* ------------------------------------------------------------------ *
+   *                 2) FIRST TAP –- select a piece                     *
+   * ------------------------------------------------------------------ */
+  if (pieceInfo && pieceInfo.color === turn) {
+    // normal legal moves
+    const basicMoves = getValidMoves(
+      currentBoardState,
+      pieceAtSquare,
+      row,
+      col,
+      turn,
+      enPassantTarget
+    );
+
+    // ---- Castling availability (king only) ----
+    let finalMoves = basicMoves;
+    let newCandidate: typeof castlingCandidate = null;
+    if (pieceInfo.type === "King" || pieceInfo.type === "K") {
+      const castlingOpts = getCastlingOptions(
+        currentBoardState,
+        row,
+        col,
+        turn,
+        castlingRights ? castlingRights[turn] : null
+      );
+      if (castlingOpts.length) {
+        // highlight destination *and* rook squares
+        const addSquares = [
+          ...castlingOpts.map(o => ({ row, col: o.type === "kingside" ? 6 : 2 })),
+          ...castlingOpts.map(o => o.pos),
+        ];
+        finalMoves = [...basicMoves, ...addSquares];
+        newCandidate = {
+          kingPos: { row, col },
+          rooks: castlingOpts,
+          boardType: boardClicked,
+        };
       }
     }
+
+    setSelectedPieceSquare({ row, col });
+    setPossibleMoves(finalMoves);
+    setCastlingCandidate(newCandidate);
+    if (newCandidate) {
+      console.log('[CASTLING DEBUG] setCastlingCandidate:', newCandidate);
+    }
+  } else {
+    // clicked empty or enemy square – clear
+    setSelectedPieceSquare(null);
+    setPossibleMoves([]);
+    setCastlingCandidate(null);
+  }
+};
+
+
+  const handlePromotionChoice = (choice: string) => {
+    if (!pendingPromotion || !socket) return;
+    const { from, to, piece, boardType } = pendingPromotion;
+    const moveDetails = {
+      from: [from.row, from.col],
+      to: [to.row, to.col],
+      piece,
+      captured: null,
+      promotion: choice,
+    };
+    socket.emit("move", {
+      room: roomFromProps,
+      boardType,
+      board: boardType === "main" ? mainBoard : secondaryBoard,
+      move: moveDetails,
+    });
+    setPendingPromotion(null);
+    setShowPromotionModal(false);
   };
 
   const squareColors = {
@@ -432,7 +666,19 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
         // isDisabled is true if it's not the server's active phase for this board OR if the board itself is resolved.
         const isDisabled = (boardType !== serverActiveBoardPhase) || isBoardResolved;
 
-        const isPossibleMoveTarget = possibleMoves.some(move => move.row === rowIndex && move.col === colIndex) && boardType === serverActiveBoardPhase && !isBoardResolved;
+        const isPossibleMoveTarget =
+        (
+          possibleMoves.some(
+            (move) => move.row === rowIndex && move.col === colIndex
+          ) ||
+          (castlingCandidate &&
+            castlingCandidate.boardType === boardType &&
+            castlingCandidate.rooks.some(
+              (r) => r.pos.row === rowIndex && r.pos.col === colIndex
+            ))
+        ) &&
+        boardType === serverActiveBoardPhase &&
+        !isBoardResolved;
 
         let titleText = `${turn}'s turn on the ${serverActiveBoardPhase} board`;
         if (isBoardResolved) {
@@ -629,8 +875,96 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
           <button onClick={() => setupDebugScenario('main_black_in_check_black_to_move')} className="px-3 py-1.5 bg-orange-200 text-orange-800 text-xs rounded hover:bg-orange-300">Main: B in Check</button>
           <button onClick={() => setupDebugScenario('secondary_white_in_check_white_to_move')} className="px-3 py-1.5 bg-orange-200 text-orange-800 text-xs rounded hover:bg-orange-300">Sec: W in Check</button>
           <button onClick={() => setupDebugScenario('main_white_causes_check_setup')} className="px-3 py-1.5 bg-purple-200 text-purple-800 text-xs rounded hover:bg-purple-300">Main: W causes Check Setup</button>
+          <button onClick={() => setupDebugScenario('promotion_white_main')} className="px-3 py-1.5 bg-green-200 text-green-800 text-xs rounded hover:bg-green-300">Promotion: White (Main)</button>
+          <button onClick={() => setupDebugScenario('promotion_black_secondary')} className="px-3 py-1.5 bg-green-200 text-green-800 text-xs rounded hover:bg-green-300">Promotion: Black (Secondary)</button>
+          <button onClick={() => setupDebugScenario('castling_white_kingside_main')} className="px-3 py-1.5 bg-blue-200 text-blue-800 text-xs rounded hover:bg-blue-300">Castling: White Kingside (Main)</button>
+          <button onClick={() => setupDebugScenario('castling_black_queenside_secondary')} className="px-3 py-1.5 bg-blue-200 text-blue-800 text-xs rounded hover:bg-blue-300">Castling: Black Queenside (Secondary)</button>
+          <button onClick={() => setupDebugScenario('enpassant_white_main')} className="px-3 py-1.5 bg-pink-200 text-pink-800 text-xs rounded hover:bg-pink-300">En Passant: White (Main)</button>
+          <button onClick={() => setupDebugScenario('enpassant_black_secondary')} className="px-3 py-1.5 bg-pink-200 text-pink-800 text-xs rounded hover:bg-pink-300">En Passant: Black (Secondary)</button>
+        </div>
+        {/* --- DEBUG: Force Kingside Castling for White on Main Board --- */}
+        <div className="mt-4 flex flex-col items-center">
+          <button
+            onClick={() => {
+              if (!socket) { alert('Socket not connected'); return; }
+              socket.emit("move", {
+                room: roomFromProps,
+                boardType: "main",
+                board: mainBoard,
+                move: {
+                  from: [7, 4], // White king's starting position
+                  to: [7, 6],   // White king's kingside castling destination
+                  piece: mainBoard[7][4],
+                  captured: null,
+                  castle: "kingside"
+                }
+              });
+            }}
+            className="px-4 py-2 bg-orange-500 text-white font-bold rounded hover:bg-orange-600 mt-2"
+          >
+            TEST: Force White Kingside Castle (Main Board)
+          </button>
         </div>
       </div>
+
+      {showPromotionModal && (
+        <div className="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex items-center justify-center z-[9999]">
+          <div className="bg-white p-6 rounded-lg shadow-lg text-center z-[10000] max-w-md mx-auto">
+            <h3 className="text-xl font-bold mb-4 text-gray-800">Promote Pawn</h3>
+            <p className="mb-4 text-lg text-gray-700">Choose a piece:</p>
+            <div className="flex justify-center gap-4 mb-6">
+              {promotionChoices.map(choice => (
+                <button
+                  key={choice.value}
+                  onClick={() => handlePromotionChoice(choice.value)}
+                  className="px-4 py-2 bg-green-500 text-white font-semibold rounded hover:bg-green-600"
+                >
+                  {choice.label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => { setShowPromotionModal(false); setPendingPromotion(null); }}
+              className="px-4 py-2 bg-gray-400 text-white rounded hover:bg-gray-500"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Castling Action Buttons (appear when king is selected and castling is available) */}
+      {castlingCandidate && castlingCandidate.rooks.length > 0 && (
+        <div className="flex gap-4 mb-2">
+          {castlingCandidate.rooks.map((rookOpt) => (
+            <button
+              key={rookOpt.type}
+              onClick={() => {
+                const { kingPos } = castlingCandidate;
+                if (!socket) { alert('Socket not connected'); return; }
+                socket.emit("move", {
+                  room: roomFromProps,
+                  boardType: serverActiveBoardPhase,
+                  board: serverActiveBoardPhase === "main" ? mainBoard : secondaryBoard,
+                  move: {
+                    from: [kingPos.row, kingPos.col],
+                    to: [kingPos.row, rookOpt.type === 'kingside' ? 6 : 2],
+                    piece: (serverActiveBoardPhase === "main" ? mainBoard : secondaryBoard)[kingPos.row][kingPos.col],
+                    captured: null,
+                    castle: rookOpt.type
+                  }
+                });
+                setCastlingCandidate(null);
+                setSelectedPieceSquare(null);
+                setPossibleMoves([]);
+              }}
+              className={`px-4 py-2 rounded font-bold text-white ${rookOpt.type === 'kingside' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-purple-600 hover:bg-purple-700'}`}
+            >
+              Castle {rookOpt.type.charAt(0).toUpperCase() + rookOpt.type.slice(1)}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

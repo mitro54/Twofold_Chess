@@ -21,8 +21,9 @@ export interface PieceInfo {
  */
 export function getPieceInfo(piece: Piece): PieceInfo | null {
   if (!piece) return null;
-  const letter = piece.charAt(0).toUpperCase();
-  const color = piece.charAt(0) === letter ? 'White' : 'Black';
+  const trimmed = piece.trim();
+  const letter = trimmed.charAt(0).toUpperCase();
+  const color = trimmed.charAt(0) === letter ? 'White' : 'Black';
 
   if (!['P', 'R', 'N', 'B', 'Q', 'K'].includes(letter)) {
     // console.warn(\`Invalid piece type for: \${piece}\`); // Could enable for debugging
@@ -32,7 +33,7 @@ export function getPieceInfo(piece: Piece): PieceInfo | null {
   return {
     type: letter as 'P' | 'R' | 'N' | 'B' | 'Q' | 'K',
     color: color,
-    id: piece
+    id: trimmed
   };
 }
 
@@ -54,7 +55,7 @@ export function getValidMoves(
   fromRow: number,
   fromCol: number,
   playerTurn: 'White' | 'Black',
-  // lastMove?: Move // Will be needed for en passant
+  enPassantTarget?: [number, number] | null,
 ): Position[] {
   const pieceInfo = getPieceInfo(pieceId);
   if (!pieceInfo || pieceInfo.color !== playerTurn) {
@@ -65,7 +66,7 @@ export function getValidMoves(
 
   switch (pieceInfo.type) {
     case 'P':
-      pseudoLegalMoves = getPawnMoves(board, pieceInfo, fromRow, fromCol);
+      pseudoLegalMoves = getPawnMoves(board, pieceInfo, fromRow, fromCol, enPassantTarget);
       break;
     case 'N':
       pseudoLegalMoves = getKnightMoves(board, pieceInfo, fromRow, fromCol);
@@ -80,10 +81,6 @@ export function getValidMoves(
       pseudoLegalMoves = getQueenMoves(board, pieceInfo, fromRow, fromCol);
       break;
     case 'K':
-      // For King moves, we will handle check prevention differently inside getKingMoves
-      // to correctly implement castling, which has its own check-related rules.
-      // For now, getKingMoves returns moves that don't land on friendly pieces.
-      // The self-check filter below will still apply.
       pseudoLegalMoves = getKingMoves(board, pieceInfo, fromRow, fromCol);
       break;
     default:
@@ -116,7 +113,7 @@ function getPawnMoves(
   pawnInfo: PieceInfo,
   row: number,
   col: number,
-  // lastMove?: Move
+  enPassantTarget?: [number, number] | null
 ): Position[] {
   const moves: Position[] = [];
   const direction = pawnInfo.color === 'White' ? -1 : 1; // White moves up (row index decreases), Black moves down
@@ -152,11 +149,25 @@ function getPawnMoves(
           moves.push({ row: captureRow, col: captureCol });
         }
       }
-      // TODO: En passant:
-      // Check if lastMove was a two-square pawn advance to [row, captureCol]
-      // and if the pawn that made that move is adjacent to current pawn at [row, captureCol]
     }
   }
+
+  // 4. En passant
+  if (enPassantTarget) {
+    // The en passant target must be on the row behind the pawn's capture row
+    // and in a column adjacent to the pawn
+    const epRow = enPassantTarget[0];
+    const epCol = enPassantTarget[1];
+    if (
+      epRow === row + direction &&
+      Math.abs(epCol - col) === 1 &&
+      ((pawnInfo.color === 'White' && row === 3) || (pawnInfo.color === 'Black' && row === 4))
+    ) {
+      // The pawn is in the correct row to perform en passant
+      moves.push({ row: epRow, col: epCol });
+    }
+  }
+
   return moves;
 }
 
@@ -443,4 +454,21 @@ export function isStalemate(board: Board, kingColor: 'White' | 'Black'): boolean
     }
   }
   return true; // Not in check, but no legal moves available
-} 
+}
+
+export const createInitialBoard = (isWhiteBottom: boolean): Array<Array<string | null>> => {
+  const emptyRow: Array<string | null> = Array(8).fill(null);
+
+  const whitePieces = ["R1", "N1", "B1", "Q1", "K1", "B2", "N2", "R2"];
+  const blackPieces = whitePieces.map((p) => p.toLowerCase());
+  const whitePawns = Array.from({ length: 8 }, (_, index) => `P${index + 1}`);
+  const blackPawns = Array.from({ length: 8 }, (_, index) => `p${index + 1}`);
+
+  return [
+    isWhiteBottom ? blackPieces : whitePieces, // Top row
+    isWhiteBottom ? blackPawns : whitePawns, // Row 1
+    ...Array(4).fill(emptyRow), // Rows 2-5
+    isWhiteBottom ? whitePawns : blackPawns, // Row 6
+    isWhiteBottom ? whitePieces : blackPieces, // Bottom row
+  ];
+}; 
