@@ -66,6 +66,31 @@ def _init_ep_dict(game_doc):
         game_doc["en_passant_target"] = {"main": None, "secondary": None}
 # ──────────────────────────────────────────────────────────────────────
 
+def _init_position_history(game_doc):
+    """
+    Ensure game_doc has position history tracking
+    """
+    if "position_history" not in game_doc:
+        game_doc["position_history"] = {
+            "main": [],  # List of FEN strings for main board
+            "secondary": []  # List of FEN strings for secondary board
+        }
+
+def _check_threefold_repetition(fen_history):
+    """
+    Check if the current position has occurred three times
+    """
+    if len(fen_history) < 3:
+        return False
+    
+    # Get the current position (last FEN)
+    current_fen = fen_history[-1]
+    
+    # Count how many times this position has occurred
+    count = sum(1 for fen in fen_history if fen == current_fen)
+    
+    return count >= 3
+
 def serialize_game_state(game_state):
     if "_id" in game_state:
         game_state["_id"] = str(game_state["_id"])
@@ -776,6 +801,8 @@ def on_move(data):
 
     # make sure the en passant field exists
     _init_ep_dict(game_doc)
+    # make sure position history exists
+    _init_position_history(game_doc)
 
     if game_doc.get("game_over", False):
         emit("move_error", {"message": "Game is already over."})
@@ -866,6 +893,23 @@ def on_move(data):
     # Apply the move
     board.push(uci_move)
     logger.debug(f"Board FEN after move: {board.fen()}")
+
+    # Add current position to history
+    current_fen = board.fen()
+    game_doc["position_history"][board_type_played].append(current_fen)
+
+    # Check for threefold repetition
+    if _check_threefold_repetition(game_doc["position_history"][board_type_played]):
+        board_outcome_field = "main_board_outcome" if board_type_played == "main" else "secondary_board_outcome"
+        game_doc[board_outcome_field] = "draw_repetition"
+        game_doc["status"] = f"Draw by threefold repetition on {board_type_played} board."
+        
+        # Check if both boards are now drawn
+        if (game_doc["main_board_outcome"] == "draw_repetition" and 
+            game_doc["secondary_board_outcome"] == "draw_repetition"):
+            game_doc["game_over"] = True
+            game_doc["winner"] = "Draw"
+            game_doc["status"] = "Game over. Draw by threefold repetition on both boards."
 
     # Update en passant target for the current board only
     ep_square = board.ep_square
