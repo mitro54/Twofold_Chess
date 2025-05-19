@@ -26,4 +26,4 @@ Secondary Board
 ## Setting up
 - To run this project on your computer / server properly, you will need to set up the .env file in the root folder
 - Before running the project for the first time, make sure to change the .env.example file name to just .env
-- If you have issues with building the project in Docker, make sure your .env file contains correct information
+- If you have issues with building the project in Docker or have Internal server error, make sure your .env file contains correct information.
