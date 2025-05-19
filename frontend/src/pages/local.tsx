@@ -1,6 +1,7 @@
 import Gameboard from "../components/Gameboard";
 import ReturnToMainMenu from "../components/ReturnToMainMenu";
 import { useEffect, useState } from 'react';
+import PageLayout from "../components/PageLayout";
 
 export default function LocalGame() {
   const [localRoomId, setLocalRoomId] = useState<string | null>(null);
@@ -11,14 +12,21 @@ export default function LocalGame() {
   }, []);
 
   if (!localRoomId) {
-    return <p>Loading local game...</p>;
+    return (
+      <PageLayout>
+        <div className="text-white text-xl">Loading local game...</div>
+      </PageLayout>
+    );
   }
 
   return (
-    <div className="flex flex-col items-center justify-center h-screen">
-      <h1 className="text-4xl font-bold mb-6">Local Game</h1>
-      <Gameboard room={localRoomId} username="Local Player" />
-      <ReturnToMainMenu />
-    </div>
+    <PageLayout>
+      <div className="w-full">
+        <Gameboard room={localRoomId} username="Local Player" />
+        <div className="mt-8 flex justify-center">
+          <ReturnToMainMenu />
+        </div>
+      </div>
+    </PageLayout>
   );
 }

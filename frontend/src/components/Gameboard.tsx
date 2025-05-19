@@ -129,6 +129,10 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
            null>(null);
 
   const [showDebugMenu, setShowDebugMenu] = useState(false);
+  const [lastTapTime, setLastTapTime] = useState<number>(0);
+  const [lastTapPosition, setLastTapPosition] = useState<{ x: number; y: number } | null>(null);
+  const DOUBLE_TAP_DELAY = 300; // milliseconds
+  const DOUBLE_TAP_DISTANCE = 50; // pixels
 
   // Helper to determine castling rights and eligible rooks for the selected king
   const getCastlingOptions = (
@@ -732,6 +736,40 @@ const handleSquareClick = (
     );
   };
 
+  const handleTouchStart = (e: React.TouchEvent) => {
+    e.stopPropagation(); // Prevent event from bubbling up
+    const touch = e.touches[0];
+    const currentTime = new Date().getTime();
+    const tapLength = currentTime - lastTapTime;
+    
+    if (lastTapPosition && tapLength < DOUBLE_TAP_DELAY && tapLength > 0) {
+      // Check if the second tap is close to the first tap
+      const distance = Math.sqrt(
+        Math.pow(touch.clientX - lastTapPosition.x, 2) +
+        Math.pow(touch.clientY - lastTapPosition.y, 2)
+      );
+      
+      if (distance < DOUBLE_TAP_DISTANCE) {
+        // Double tap detected
+        e.preventDefault(); // Prevent any default behavior
+        if (visualUpdateTimeoutRef.current) {
+          clearTimeout(visualUpdateTimeoutRef.current);
+          visualUpdateTimeoutRef.current = null;
+        }
+        setActiveBoard(prev => {
+          const nextBoard = prev === "main" ? "secondary" : "main";
+          console.log(`DOUBLE TAP: Toggling activeBoard from ${prev} to ${nextBoard}`);
+          return nextBoard;
+        });
+        setSelectedPieceSquare(null);
+        setPossibleMoves([]);
+      }
+    }
+    
+    setLastTapTime(currentTime);
+    setLastTapPosition({ x: touch.clientX, y: touch.clientY });
+  };
+
   return (
     <div className="flex flex-col items-center select-none">
       <h2 className="text-2xl font-bold mb-4 text-gray-600">Room: {roomFromProps}</h2>
@@ -758,7 +796,10 @@ const handleSquareClick = (
         {gameFinished ? `Game Over: ${winner || "Unknown Result"}` : `${turn}'s turn on the ${serverActiveBoardPhase} board`}
       </h3>
 
-      <div className="relative w-[400px] h-[400px] mt-2">
+      <div 
+        className="relative w-[400px] h-[400px] mt-2"
+        onTouchStart={handleTouchStart}
+      >
         <div
           className={`absolute inset-0 grid grid-cols-8 ${activeBoard === "main" ? "shadow-lg" : ""}`}
           style={{
@@ -817,9 +858,11 @@ const handleSquareClick = (
           setSelectedPieceSquare(null);
           setPossibleMoves([]);
         }}
-        className="md:hidden mt-4 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-lg hover:bg-indigo-700 active:bg-indigo-800 transition-colors duration-200 flex items-center justify-center gap-2"
+        className="md:hidden mt-4 px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-indigo-500/30 hover:border-indigo-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(99,102,241,0.3)] hover:shadow-[0_0_20px_rgba(99,102,241,0.5)] flex items-center justify-center min-w-[160px] group"
       >
-        <span>Switch to {activeBoard === "main" ? "Secondary" : "Main"} Board</span>
+        <span className="bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent group-hover:from-indigo-300 group-hover:to-purple-300 transition-colors">
+          Switch to {activeBoard === "main" ? "Secondary" : "Main"} Board
+        </span>
       </button>
 
       {showCheckmateModal && (
@@ -843,15 +886,19 @@ const handleSquareClick = (
       <div className="flex flex-col sm:flex-row gap-4 mt-4">
         <button
           onClick={resetBoard}
-          className="px-4 py-2 bg-blue-600 text-white font-bold rounded hover:bg-blue-700"
+          className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-blue-500/30 hover:border-blue-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(59,130,246,0.3)] hover:shadow-[0_0_20px_rgba(59,130,246,0.5)] flex items-center justify-center min-w-[160px] group"
         >
-          Reset Both Boards
+          <span className="bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent group-hover:from-blue-300 group-hover:to-cyan-300 transition-colors">
+            Reset Both Boards
+          </span>
         </button>
         <button
           onClick={() => setShowDebugMenu(!showDebugMenu)}
-          className="px-4 py-2 bg-gray-600 text-white font-bold rounded hover:bg-gray-700"
+          className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-purple-500/30 hover:border-purple-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(168,85,247,0.3)] hover:shadow-[0_0_20px_rgba(168,85,247,0.5)] flex items-center justify-center min-w-[160px] group"
         >
-          Debug Menu
+          <span className="bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent group-hover:from-purple-300 group-hover:to-pink-300 transition-colors">
+            Debug Menu
+          </span>
         </button>
       </div>
 
