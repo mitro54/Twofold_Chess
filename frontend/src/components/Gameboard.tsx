@@ -128,6 +128,7 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
   useState<{ White:{K:boolean;Q:boolean}; Black:{K:boolean;Q:boolean} }|
            null>(null);
 
+  const [showDebugMenu, setShowDebugMenu] = useState(false);
 
   // Helper to determine castling rights and eligible rooks for the selected king
   const getCastlingOptions = (
@@ -737,11 +738,13 @@ const handleSquareClick = (
       <h3 className="text-xl font-semibold mb-1 text-indigo-700">
         {gameFinished ? `Game Over: ${winner || "Unknown Result"}` : `${turn}'s turn on the ${serverActiveBoardPhase} board`}
       </h3>
-      {respondingToCheckBoard && (
-        <p className="text-lg text-red-700 font-bold animate-pulse">
-          {turn} must respond to check on the {respondingToCheckBoard} board!
-        </p>
-      )}
+      <div className="relative h-8 mb-2 flex items-center justify-center">
+        {respondingToCheckBoard && (
+          <p className="absolute text-lg text-red-700 font-bold animate-pulse whitespace-nowrap">
+            {turn} must respond to check on the {respondingToCheckBoard} board!
+          </p>
+        )}
+      </div>
       {mainBoardOutcome !== "active" && <p className="text-sm text-red-600 font-semibold">Main Board: {mainBoardOutcome.replace("_"," ")}</p>}
       {secondaryBoardOutcome !== "active" && <p className="text-sm text-blue-600 font-semibold">Secondary Board: {secondaryBoardOutcome.replace("_"," ")}</p>}
 
@@ -818,50 +821,75 @@ const handleSquareClick = (
         >
           Reset Both Boards
         </button>
+        <button
+          onClick={() => setShowDebugMenu(!showDebugMenu)}
+          className="px-4 py-2 bg-gray-600 text-white font-bold rounded hover:bg-gray-700"
+        >
+          Debug Menu
+        </button>
       </div>
 
-      {/* Debug Scenarios Section */}
-      <div className="mt-6 p-4 border border-dashed border-red-400 rounded-md">
-        <h4 className="text-lg font-semibold text-red-600 mb-3 text-center">Debug Scenarios</h4>
-        <div className="grid grid-cols-2 gap-2">
-          <button onClick={() => setupDebugScenario('main_white_checkmates_black')} className="px-3 py-1.5 bg-red-200 text-red-800 text-xs rounded hover:bg-red-300">Main: W mates B</button>
-          <button onClick={() => setupDebugScenario('secondary_black_checkmates_white')} className="px-3 py-1.5 bg-red-200 text-red-800 text-xs rounded hover:bg-red-300">Sec: B mates W</button>
-          <button onClick={() => setupDebugScenario('main_stalemate_black_to_move')} className="px-3 py-1.5 bg-yellow-200 text-yellow-800 text-xs rounded hover:bg-yellow-300">Main: Stalemate (B)</button>
-          <button onClick={() => setupDebugScenario('secondary_stalemate_white_to_move')} className="px-3 py-1.5 bg-yellow-200 text-yellow-800 text-xs rounded hover:bg-yellow-300">Sec: Stalemate (W)</button>
-          <button onClick={() => setupDebugScenario('main_black_in_check_black_to_move')} className="px-3 py-1.5 bg-orange-200 text-orange-800 text-xs rounded hover:bg-orange-300">Main: B in Check</button>
-          <button onClick={() => setupDebugScenario('secondary_white_in_check_white_to_move')} className="px-3 py-1.5 bg-orange-200 text-orange-800 text-xs rounded hover:bg-orange-300">Sec: W in Check</button>
-          <button onClick={() => setupDebugScenario('main_white_causes_check_setup')} className="px-3 py-1.5 bg-purple-200 text-purple-800 text-xs rounded hover:bg-purple-300">Main: W causes Check Setup</button>
-          <button onClick={() => setupDebugScenario('promotion_white_main')} className="px-3 py-1.5 bg-green-200 text-green-800 text-xs rounded hover:bg-green-300">Promotion: White (Main)</button>
-          <button onClick={() => setupDebugScenario('promotion_black_secondary')} className="px-3 py-1.5 bg-green-200 text-green-800 text-xs rounded hover:bg-green-300">Promotion: Black (Secondary)</button>
-          <button onClick={() => setupDebugScenario('castling_white_kingside_main')} className="px-3 py-1.5 bg-blue-200 text-blue-800 text-xs rounded hover:bg-blue-300">Castling: White Kingside (Main)</button>
-          <button onClick={() => setupDebugScenario('castling_black_queenside_secondary')} className="px-3 py-1.5 bg-blue-200 text-blue-800 text-xs rounded hover:bg-blue-300">Castling: Black Queenside (Secondary)</button>
-          <button onClick={() => setupDebugScenario('enpassant_white_main')} className="px-3 py-1.5 bg-pink-200 text-pink-800 text-xs rounded hover:bg-pink-300">En Passant: White (Main)</button>
-          <button onClick={() => setupDebugScenario('enpassant_black_secondary')} className="px-3 py-1.5 bg-pink-200 text-pink-800 text-xs rounded hover:bg-pink-300">En Passant: Black (Secondary)</button>
-        </div>
-        {/* --- DEBUG: Force Kingside Castling for White on Main Board --- */}
-        <div className="mt-4 flex flex-col items-center">
-          <button
-            onClick={() => {
-              if (!socket) { alert('Socket not connected'); return; }
-              socket.emit("move", {
-                room: roomFromProps,
-                boardType: "main",
-                board: mainBoard,
-                move: {
-                  from: [7, 4], // White king's starting position
-                  to: [7, 6],   // White king's kingside castling destination
-                  piece: mainBoard[7][4],
-                  captured: null,
-                  castle: "kingside"
-                }
-              });
-            }}
-            className="px-4 py-2 bg-orange-500 text-white font-bold rounded hover:bg-orange-600 mt-2"
+      {/* Debug Scenarios Modal */}
+      {showDebugMenu && (
+        <div 
+          className="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex items-center justify-center z-50"
+          onClick={() => setShowDebugMenu(false)}
+        >
+          <div 
+            className="bg-gray-800 p-6 rounded-lg shadow-lg max-w-2xl w-full mx-4"
+            onClick={e => e.stopPropagation()}
           >
-            TEST: Force White Kingside Castle (Main Board)
-          </button>
+            <div className="flex justify-between items-center mb-4">
+              <h4 className="text-xl font-semibold text-red-400">Debug Scenarios</h4>
+              <button
+                onClick={() => setShowDebugMenu(false)}
+                className="text-gray-400 hover:text-gray-200"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => { setupDebugScenario('main_white_checkmates_black'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-red-900 text-red-200 text-xs rounded hover:bg-red-800">Main: W mates B</button>
+              <button onClick={() => { setupDebugScenario('secondary_black_checkmates_white'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-red-900 text-red-200 text-xs rounded hover:bg-red-800">Sec: B mates W</button>
+              <button onClick={() => { setupDebugScenario('main_stalemate_black_to_move'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-yellow-900 text-yellow-200 text-xs rounded hover:bg-yellow-800">Main: Stalemate (B)</button>
+              <button onClick={() => { setupDebugScenario('secondary_stalemate_white_to_move'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-yellow-900 text-yellow-200 text-xs rounded hover:bg-yellow-800">Sec: Stalemate (W)</button>
+              <button onClick={() => { setupDebugScenario('main_black_in_check_black_to_move'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-orange-900 text-orange-200 text-xs rounded hover:bg-orange-800">Main: B in Check</button>
+              <button onClick={() => { setupDebugScenario('secondary_white_in_check_white_to_move'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-orange-900 text-orange-200 text-xs rounded hover:bg-orange-800">Sec: W in Check</button>
+              <button onClick={() => { setupDebugScenario('main_white_causes_check_setup'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-purple-900 text-purple-200 text-xs rounded hover:bg-purple-800">Main: W causes Check Setup</button>
+              <button onClick={() => { setupDebugScenario('promotion_white_main'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-green-900 text-green-200 text-xs rounded hover:bg-green-800">Promotion: White (Main)</button>
+              <button onClick={() => { setupDebugScenario('promotion_black_secondary'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-green-900 text-green-200 text-xs rounded hover:bg-green-800">Promotion: Black (Secondary)</button>
+              <button onClick={() => { setupDebugScenario('castling_white_kingside_main'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-blue-900 text-blue-200 text-xs rounded hover:bg-blue-800">Castling: White Kingside (Main)</button>
+              <button onClick={() => { setupDebugScenario('castling_black_queenside_secondary'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-blue-900 text-blue-200 text-xs rounded hover:bg-blue-800">Castling: Black Queenside (Secondary)</button>
+              <button onClick={() => { setupDebugScenario('enpassant_white_main'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-pink-900 text-pink-200 text-xs rounded hover:bg-pink-800">En Passant: White (Main)</button>
+              <button onClick={() => { setupDebugScenario('enpassant_black_secondary'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-pink-900 text-pink-200 text-xs rounded hover:bg-pink-800">En Passant: Black (Secondary)</button>
+            </div>
+            {/* --- DEBUG: Force Kingside Castling for White on Main Board --- */}
+            <div className="mt-4 flex flex-col items-center">
+              <button
+                onClick={() => {
+                  if (!socket) { alert('Socket not connected'); return; }
+                  socket.emit("move", {
+                    room: roomFromProps,
+                    boardType: "main",
+                    board: mainBoard,
+                    move: {
+                      from: [7, 4], // White king's starting position
+                      to: [7, 6],   // White king's kingside castling destination
+                      piece: mainBoard[7][4],
+                      captured: null,
+                      castle: "kingside"
+                    }
+                  });
+                  setShowDebugMenu(false);
+                }}
+                className="px-4 py-2 bg-orange-900 text-orange-200 font-bold rounded hover:bg-orange-800 mt-2"
+              >
+                TEST: Force White Kingside Castle (Main Board)
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
       {showPromotionModal && (
         <div className="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex items-center justify-center z-[9999]">
