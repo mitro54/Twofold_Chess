@@ -734,19 +734,29 @@ const handleSquareClick = (
 
   return (
     <div className="flex flex-col items-center select-none">
-      <h2 className="text-2xl font-bold mb-2 text-gray-600">Room: {roomFromProps}</h2>
-      <h3 className="text-xl font-semibold mb-1 text-indigo-700">
-        {gameFinished ? `Game Over: ${winner || "Unknown Result"}` : `${turn}'s turn on the ${serverActiveBoardPhase} board`}
-      </h3>
-      <div className="relative h-8 mb-2 flex items-center justify-center">
+      <h2 className="text-2xl font-bold mb-4 text-gray-600">Room: {roomFromProps}</h2>
+      <div className="relative h-8 mb-1 flex items-center justify-center">
         {respondingToCheckBoard && (
           <p className="absolute text-lg text-red-700 font-bold animate-pulse whitespace-nowrap">
             {turn} must respond to check on the {respondingToCheckBoard} board!
           </p>
         )}
       </div>
-      {mainBoardOutcome !== "active" && <p className="text-sm text-red-600 font-semibold">Main Board: {mainBoardOutcome.replace("_"," ")}</p>}
-      {secondaryBoardOutcome !== "active" && <p className="text-sm text-blue-600 font-semibold">Secondary Board: {secondaryBoardOutcome.replace("_"," ")}</p>}
+      <div className="relative h-6 mb-3 flex items-center justify-center gap-4">
+        {mainBoardOutcome !== "active" && (
+          <p className="text-sm text-red-600 font-semibold whitespace-nowrap">
+            Main Board: {mainBoardOutcome.replace("_"," ")}
+          </p>
+        )}
+        {secondaryBoardOutcome !== "active" && (
+          <p className="text-sm text-blue-600 font-semibold whitespace-nowrap">
+            Secondary Board: {secondaryBoardOutcome.replace("_"," ")}
+          </p>
+        )}
+      </div>
+      <h3 className="text-xl font-semibold mb-2 text-indigo-700">
+        {gameFinished ? `Game Over: ${winner || "Unknown Result"}` : `${turn}'s turn on the ${serverActiveBoardPhase} board`}
+      </h3>
 
       <div className="relative w-[400px] h-[400px] mt-2">
         <div
@@ -796,6 +806,22 @@ const handleSquareClick = (
         </div>
       </div>
 
+      {/* Mobile Board Switch Button */}
+      <button
+        onClick={() => {
+          if (visualUpdateTimeoutRef.current) {
+            clearTimeout(visualUpdateTimeoutRef.current);
+            visualUpdateTimeoutRef.current = null;
+          }
+          setActiveBoard(prev => prev === "main" ? "secondary" : "main");
+          setSelectedPieceSquare(null);
+          setPossibleMoves([]);
+        }}
+        className="md:hidden mt-4 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg shadow-lg hover:bg-indigo-700 active:bg-indigo-800 transition-colors duration-200 flex items-center justify-center gap-2"
+      >
+        <span>Switch to {activeBoard === "main" ? "Secondary" : "Main"} Board</span>
+      </button>
+
       {showCheckmateModal && (
         <div className="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-lg shadow-lg text-center z-60 max-w-md mx-auto">
@@ -813,8 +839,8 @@ const handleSquareClick = (
         </div>
       )}
 
-      <p className="text-lg text-gray-600 mt-4">Press Spacebar to swap boards</p>
-      <div className="flex gap-4 mt-4">
+      <p className="text-lg text-gray-600 mt-4 hidden md:block">Press Spacebar to swap boards</p>
+      <div className="flex flex-col sm:flex-row gap-4 mt-4">
         <button
           onClick={resetBoard}
           className="px-4 py-2 bg-blue-600 text-white font-bold rounded hover:bg-blue-700"
