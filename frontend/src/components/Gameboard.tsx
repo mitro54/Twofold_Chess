@@ -86,7 +86,6 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [moveHistory, setMoveHistory] = useState<string[]>([]);
   const [gameFinished, setGameFinished] = useState(false);
-  const [showFinishModal, setShowFinishModal] = useState(false);
   const [showCheckmateModal, setShowCheckmateModal] = useState(false);
   const [gameEndMessage, setGameEndMessage] = useState("");
   const [winner, setWinner] = useState<"White" | "Black" | "Draw" | null>(null);
@@ -283,7 +282,7 @@ const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: pr
       setSelectedPieceSquare(null);
       setPossibleMoves([]);
       setGameFinished(data.game_over || false); 
-      setShowFinishModal(false);    
+      setShowCheckmateModal(false);    
       setWinner(data.winner || null); 
       setMainBoardOutcome(data.main_board_outcome || "active");
       setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
@@ -811,49 +810,6 @@ const handleSquareClick = (
         </div>
       )}
 
-      {showFinishModal && (
-  <div
-    className="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex items-center justify-center z-50"
-  >
-    <div className="bg-white p-6 rounded-lg shadow-lg text-center z-60">
-      <h3 className="text-lg font-bold mb-4">Finish Game</h3>
-      <p className="mb-4 text-black">Select the winner:</p>
-      <div className="flex justify-center items-center gap-4 mb-6">
-        <button
-          onClick={() => setWinner("White")}
-          className={`px-6 py-2 rounded ${
-            winner === "White" ? "bg-blue-500 text-white" : "bg-gray-200"
-          }`}
-        >
-          White
-        </button>
-        <button
-          onClick={() => setWinner("Black")}
-          className={`px-6 py-2 rounded ${
-            winner === "Black" ? "bg-blue-500 text-white" : "bg-gray-200"
-          }`}
-        >
-          Black
-        </button>
-      </div>
-      <div className="flex justify-center items-center gap-4 mt-6">
-        <button
-          onClick={handleFinishGame}
-          className="px-6 py-2 bg-green-500 text-white rounded"
-        >
-          Confirm
-        </button>
-        <button
-          onClick={() => setShowFinishModal(false)}
-          className="px-6 py-2 bg-red-500 text-white rounded"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
-  </div>
-)}
-
       <p className="text-lg text-gray-600 mt-4">Press Spacebar to swap boards</p>
       <div className="flex gap-4 mt-4">
         <button
@@ -861,12 +817,6 @@ const handleSquareClick = (
           className="px-4 py-2 bg-blue-600 text-white font-bold rounded hover:bg-blue-700"
         >
           Reset Both Boards
-        </button>
-        <button
-          onClick={() => setShowFinishModal(true)}
-          className="px-4 py-2 bg-green-600 text-white font-bold rounded hover:bg-green-700"
-        >
-          Finish Game
         </button>
       </div>
 

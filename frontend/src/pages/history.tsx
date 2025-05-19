@@ -8,8 +8,10 @@ import ReturnToMainMenu from "../components/ReturnToMainMenu";
 interface Game {
   room: string;
   winner: string;
-  board: string;
+  checkmate_board: string | null;
   moves: string[];
+  status: string;
+  end_reason: string;
 }
 
 const HistoryPage: React.FC = () => {
@@ -80,7 +82,7 @@ const HistoryPage: React.FC = () => {
                   </p>
                   <p className="font-semibold text-lg">
                     <span className="text-gray-400">Checkmate Board:</span>{" "}
-                    {game.board}
+                    {game.checkmate_board ? game.checkmate_board : "Draw - No checkmate"}
                   </p>
                 </div>
               </div>

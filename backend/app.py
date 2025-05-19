@@ -105,7 +105,10 @@ def serialize_game_state(game_state):
 # Route: Get all games data
 @app.route("/api/games", methods=["GET"])
 def get_all_games():
-    games = list(games_collection.find({"status": "completed"}, {"_id": 0}))
+    games = list(games_collection.find(
+        {"status": "completed"}, 
+        {"_id": 0}
+    ).sort("_id", -1))  # Sort by _id in descending order (newest first)
     return jsonify(games), 200
 
 
@@ -879,7 +882,7 @@ def on_move(data):
     captured_piece_name = move_details.get("captured")
     # --- Move Notation ---
     move_notation = board.san(uci_move)
-    game_doc.setdefault("moves", []).append(move_notation)
+    game_doc.setdefault("moves", []).append(f"{current_player_color}: {move_notation} on {board_type_played} board")
 
     # Save board state before move for capture detection
     prev_board_arr = [row[:] for row in current_board_state]
@@ -910,6 +913,19 @@ def on_move(data):
             game_doc["game_over"] = True
             game_doc["winner"] = "Draw"
             game_doc["status"] = "Game over. Draw by threefold repetition on both boards."
+            
+            # Save the completed game
+            completed_game_data = {
+                "room": room,
+                "winner": "Draw",
+                "checkmate_board": None,  # No checkmate board for draws
+                "moves": game_doc["moves"],
+                "status": "completed",
+                "end_reason": "repetition",
+                "main_board_outcome": game_doc["main_board_outcome"],
+                "secondary_board_outcome": game_doc["secondary_board_outcome"]
+            }
+            games_collection.insert_one(completed_game_data)
 
     # Update en passant target for the current board only
     ep_square = board.ep_square
@@ -1000,6 +1016,20 @@ def on_move(data):
         game_doc["game_over"] = True
         game_doc["winner"] = current_player_color
         game_doc["status"] = f"{current_player_color} wins by checkmate on {board_type_played} board."
+        
+        # Save the completed game
+        completed_game_data = {
+            "room": room,
+            "winner": game_doc["winner"],
+            "checkmate_board": board_type_played,  # Add which board the checkmate occurred on
+            "moves": game_doc["moves"],
+            "status": "completed",
+            "end_reason": "checkmate",
+            "main_board_outcome": game_doc["main_board_outcome"],
+            "secondary_board_outcome": game_doc["secondary_board_outcome"]
+        }
+        games_collection.insert_one(completed_game_data)
+        
         games_collection.update_one({"room": room}, {"$set": game_doc})
         socketio.emit("game_update", serialize_game_state(game_doc), room=room)
         return
@@ -1033,6 +1063,26 @@ def on_move(data):
         if game_doc[board_played_outcome_field] == "active":
             game_doc[board_played_outcome_field] = "draw_stalemate"
             game_doc["status"] = f"Stalemate on {board_type_played} board for {opponent_color}."
+            
+            # Check if both boards are now drawn
+            if (game_doc["main_board_outcome"] == "draw_stalemate" and 
+                game_doc["secondary_board_outcome"] == "draw_stalemate"):
+                game_doc["game_over"] = True
+                game_doc["winner"] = "Draw"
+                game_doc["status"] = "Game over. Draw by stalemate on both boards."
+                
+                # Save the completed game
+                completed_game_data = {
+                    "room": room,
+                    "winner": "Draw",
+                    "checkmate_board": None,  # No checkmate board for draws
+                    "moves": game_doc["moves"],
+                    "status": "completed",
+                    "end_reason": "stalemate",
+                    "main_board_outcome": game_doc["main_board_outcome"],
+                    "secondary_board_outcome": game_doc["secondary_board_outcome"]
+                }
+                games_collection.insert_one(completed_game_data)
 
     # 5. Normal Turn Progression (or after stalemate/check escape processing that didn't end turn)
     game_doc["is_responding_to_check_on_board"] = None
