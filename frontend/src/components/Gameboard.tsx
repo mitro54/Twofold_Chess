@@ -749,9 +749,9 @@ const handleSquareClick = (
         <div
           className={`absolute inset-0 grid grid-cols-8 ${activeBoard === "main" ? "shadow-lg" : ""}`}
           style={{
-            transform: activeBoard === "main" ? "none" : "translate(5px, 5px)",
+            transform: activeBoard === "main" ? "none" : "translate(10px, 10px)",
             zIndex: activeBoard === "main" ? 2 : 1,
-            opacity: activeBoard === "main" ? 1 : (mainBoardOutcome !== "active" ? 0.4 : 0.6),
+            opacity: activeBoard === "main" ? 1 : (mainBoardOutcome !== "active" ? 0 : 0.2),
             filter: activeBoard === "main" ? "none" : (mainBoardOutcome !== "active" ? "grayscale(90%)" : "grayscale(80%)"),
             transition: "transform 0.3s ease-in-out, opacity 0.3s ease-in-out, filter 0.3s ease-in-out, box-shadow 0.3s ease-in-out",
             boxShadow: activeBoard === "main" ? "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)" : "none",
@@ -772,9 +772,9 @@ const handleSquareClick = (
         <div
           className={`absolute inset-0 grid grid-cols-8 ${activeBoard === "secondary" ? "shadow-lg" : ""}`}
           style={{
-            transform: activeBoard === "secondary" ? "none" : "translate(5px, 5px)",
+            transform: activeBoard === "secondary" ? "none" : "translate(10px, 10px)",
             zIndex: activeBoard === "secondary" ? 2 : 1,
-            opacity: activeBoard === "secondary" ? 1 : (secondaryBoardOutcome !== "active" ? 0.4 : 0.6),
+            opacity: activeBoard === "secondary" ? 1 : (secondaryBoardOutcome !== "active" ? 0.7 : 0.85),
             filter: activeBoard === "secondary" ? "none" : (secondaryBoardOutcome !== "active" ? "grayscale(90%)" : "grayscale(80%)"),
             transition: "transform 0.3s ease-in-out, opacity 0.3s ease-in-out, filter 0.3s ease-in-out, box-shadow 0.3s ease-in-out",
             boxShadow: activeBoard === "secondary" ? "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)" : "none",
