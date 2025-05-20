@@ -41,16 +41,16 @@ interface GameboardProps {
 
 const pieceSymbols: Record<string, string> = {
   P: "♙",
-  p: "♟",
-  R: "♖",
+  p: "♙",
+  R: "♜",
   r: "♜",
-  N: "♘",
+  N: "♞",
   n: "♞",
-  B: "♗",
+  B: "♝",
   b: "♝",
-  Q: "♕",
+  Q: "♛",
   q: "♛",
-  K: "♔",
+  K: "♚",
   k: "♚",
 };
 
@@ -723,8 +723,10 @@ const handleSquareClick = (
 
             {piece && (
               <span
-                className={`text-3xl md:text-4xl lg:text-5xl font-bold leading-none z-10 ${
-                  piece.toUpperCase() === piece ? "text-white" : "text-black"
+                className={`text-4xl md:text-5xl lg:text-6xl font-extrabold leading-none z-10 ${
+                  piece.toUpperCase() === piece 
+                    ? "text-white drop-shadow-[0_3px_3px_rgba(0,0,0,0.9)]" 
+                    : "text-black drop-shadow-[0_2px_2px_rgba(255,255,255,0.7)]"
                 }`}
               >
                 {pieceSymbols[piece[0]]}
