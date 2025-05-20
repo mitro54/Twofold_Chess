@@ -1,37 +1,77 @@
-import { lobbyManager } from './lobbyManager';
+import express from "express";
+import { createServer } from "http";
+import { Server } from "socket.io";
+import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import environment from "./src/config/environment";
+import { setupSocketHandlers } from "./src/socket/socketHandlers";
+import { connectDB } from "./src/database/connection";
+import { errorHandler } from "./src/middleware/errorHandler";
+import { logger } from "./src/utils/logger";
 
-io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+const app = express();
+const httpServer = createServer(app);
 
-  socket.on("join", ({ username, room }) => {
-    console.log(`User ${username} joining room: ${room}`);
-    socket.join(room);
-    socket.data.username = username;
-    socket.data.room = room;
+// Security middleware
+app.use(helmet());
+app.use(cors({
+  origin: environment.corsOrigin,
+  methods: ['GET', 'POST'],
+  credentials: true,
+}));
 
-    // Add player to lobby if it exists
-    const lobby = lobbyManager.getLobby(room);
-    if (lobby) {
-      lobbyManager.addPlayerToLobby(room, username);
-    }
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later.',
+});
+app.use(limiter);
+
+// Socket.IO setup with production settings
+const io = new Server(httpServer, {
+  cors: {
+    origin: environment.corsOrigin,
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
+  transports: ['websocket'],
+  pingTimeout: 60000,
+  pingInterval: 25000,
+});
+
+// Connect to database
+connectDB()
+  .then(() => {
+    logger.info('Connected to database');
+  })
+  .catch((error) => {
+    logger.error('Database connection error:', error);
+    process.exit(1);
   });
 
-  socket.on("create_lobby", ({ roomId, host, isPrivate }) => {
-    console.log(`Creating lobby: ${roomId} by ${host} (private: ${isPrivate})`);
-    lobbyManager.createLobby(roomId, host, isPrivate);
-  });
+// Setup socket handlers
+setupSocketHandlers(io);
 
-  socket.on("get_lobbies", () => {
-    console.log(`User ${socket.data.username} requesting lobby list`);
-    socket.emit("lobby_list", lobbyManager.getLobbies());
-  });
+// Error handling middleware
+app.use(errorHandler);
 
-  socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
-    if (socket.data.username && socket.data.room) {
-      lobbyManager.removePlayerFromLobby(socket.data.room, socket.data.username);
-    }
-  });
+// Start server
+const PORT = environment.port;
+httpServer.listen(PORT, () => {
+  logger.info(`Server running in ${environment.isProduction ? 'production' : 'development'} mode`);
+  logger.info(`Server listening on port ${PORT}`);
+});
 
-  // ... rest of the existing socket event handlers ...
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception:', error);
+  process.exit(1);
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (error) => {
+  logger.error('Unhandled Rejection:', error);
+  process.exit(1);
 }); 
