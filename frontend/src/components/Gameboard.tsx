@@ -2,6 +2,7 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from "react";
 import { io, Socket } from "socket.io-client";
+import environment from "../config/environment";
 import {
   getValidMoves,
   getPieceInfo,
@@ -271,12 +272,33 @@ const Gameboard: React.FC<GameboardProps> = ({
 
   useEffect(() => {
     console.log(`FRONTEND: Initializing socket effect. Username: ${usernameFromProps}, Room: ${roomFromProps}`);
-    const newSocketInstance = io(process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5001");
+    const newSocketInstance = io(environment.apiUrl, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      timeout: 10000,
+      autoConnect: true
+    });
 
-    setSocket(newSocketInstance);
+    newSocketInstance.on('connect', () => {
+      console.log('Socket connected successfully');
+      setSocket(newSocketInstance);
+      console.log(`FRONTEND: Emitting 'join' for room: ${roomFromProps}`);
+      newSocketInstance.emit("join", { username: usernameFromProps, room: roomFromProps });
+    });
 
-    console.log(`FRONTEND: Emitting 'join' for room: ${roomFromProps}`);
-    newSocketInstance.emit("join", { username: usernameFromProps, room: roomFromProps });
+    newSocketInstance.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
+      alert('Failed to connect to game server. Please try again.');
+    });
+
+    newSocketInstance.on('disconnect', (reason) => {
+      console.log('Socket disconnected:', reason);
+      if (reason === 'io server disconnect') {
+        alert('Disconnected from server. Please refresh the page.');
+      }
+    });
 
     newSocketInstance.on("game_state", (data: GameStateData) => {
       console.log("FRONTEND: game_state event HANDLER ENTERED. Data:", data ? JSON.parse(JSON.stringify(data)) : 'No data received');
@@ -411,9 +433,8 @@ const Gameboard: React.FC<GameboardProps> = ({
       return;
     }
     console.log(`FRONTEND: Requesting debug scenario: ${scenarioName} for room: ${roomFromProps}`);
-    const backendUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5001"; // Default for local dev
     try {
-      const response = await fetch(`${backendUrl}/api/debug/setup/${scenarioName}`,
+      const response = await fetch(`${environment.apiUrl}/api/debug/setup/${scenarioName}`,
         {
           method: "POST",
           headers: {

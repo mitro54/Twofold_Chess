@@ -7,9 +7,9 @@ import { io, Socket } from "socket.io-client";
 import environment from "../config/environment";
 
 interface Lobby {
-  roomId: string;
+  room: string;
   host: string;
-  isPrivate: boolean;
+  is_private: boolean;
   createdAt: number;
 }
 
@@ -24,31 +24,97 @@ export default function MultiplayerSetup() {
   const [isWaiting, setIsWaiting] = useState(false);
   const [playerColor, setPlayerColor] = useState<"White" | "Black" | null>(null);
 
-  useEffect(() => {
-    const socket = io(environment.apiUrl, {
-      transports: ['websocket'],
-      autoConnect: false,
-    });
-    setSocket(socket);
+  // Function to initialize socket connection
+  const initializeSocket = () => {
+    if (socket) {
+      console.log("Socket already exists, cleaning up");
+      socket.disconnect();
+    }
 
-    socket.on("lobby_list", (lobbyList: Lobby[]) => {
+    console.log("Initializing new socket connection at:", environment.apiUrl);
+    const newSocket = io(environment.apiUrl, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      timeout: 10000,
+      autoConnect: true,
+    });
+
+    newSocket.on("connect", () => {
+      console.log("Socket connected successfully");
+      // Refresh lobbies when connected
+      newSocket.emit("get_lobbies");
+    });
+
+    newSocket.on("connect_error", (error) => {
+      console.error("Socket connection error:", error);
+      alert("Failed to connect to game server. Please try again.");
+    });
+
+    newSocket.on("disconnect", (reason) => {
+      console.log("Socket disconnected:", reason);
+      if (reason === "io server disconnect") {
+        alert("Disconnected from server. Please refresh the page.");
+      }
+    });
+
+    newSocket.on("lobby_list", (lobbyList: Lobby[]) => {
+      console.log("Received lobby list:", lobbyList);
       setLobbies(lobbyList);
     });
 
-    socket.on("player_joined", (data: { color: "White" | "Black" }) => {
-      setPlayerColor(data.color);
+    newSocket.on("error", (data: { message: string }) => {
+      console.error("Game error:", data);
+      alert(data.message);
+      setGameStarted(false);
       setIsWaiting(false);
     });
 
-    socket.on("game_start", (data: { color: "White" | "Black" }) => {
+    newSocket.on("player_joined", (data: { color: "White" | "Black" }) => {
+      console.log("Player joined:", data);
       setPlayerColor(data.color);
       setIsWaiting(false);
+      setGameStarted(true);
     });
 
+    newSocket.on("game_start", (data: { color: "White" | "Black" }) => {
+      console.log("Game started:", data);
+      setPlayerColor(data.color);
+      setIsWaiting(false);
+      setGameStarted(true);
+    });
+
+    newSocket.on("game_state", (state) => {
+      console.log("Received game state:", state);
+    });
+
+    newSocket.on("player_left", (data: { username: string }) => {
+      console.log("Player left:", data);
+      if (data.username === username) {
+        setGameStarted(false);
+        setIsWaiting(false);
+        setPlayerColor(null);
+        setRoom("");
+        // Clean up socket when player leaves
+        newSocket.disconnect();
+        setSocket(null);
+      }
+    });
+
+    setSocket(newSocket);
+    return newSocket;
+  };
+
+  // Clean up socket on component unmount
+  useEffect(() => {
     return () => {
-      socket.disconnect();
+      if (socket) {
+        console.log("Cleaning up socket connection on unmount");
+        socket.disconnect();
+      }
     };
-  }, []);
+  }, [socket]);
 
   const handleStartGame = () => {
     if (!username.trim()) {
@@ -56,16 +122,17 @@ export default function MultiplayerSetup() {
       return;
     }
     if (!room.trim()) {
-      setRoom(uuidv4());
+      setRoom(uuidv4().slice(0, 8)); // Generate a random room ID if none provided
     }
-    if (socket) {
-      socket.emit("create_lobby", {
-        roomId: room,
-        host: username,
-        isPrivate: isPrivate
-      });
-      setIsWaiting(true);
-    }
+    
+    const gameSocket = initializeSocket();
+    console.log("Creating lobby with:", { room, username, isPrivate });
+    gameSocket.emit("create_lobby", {
+      roomId: room,
+      host: username,
+      isPrivate: isPrivate
+    });
+    setIsWaiting(true);
     setGameStarted(true);
   };
 
@@ -75,12 +142,19 @@ export default function MultiplayerSetup() {
       return;
     }
     setRoom(roomId);
-    setGameStarted(true);
+    
+    const gameSocket = initializeSocket();
+    console.log("Joining lobby:", { roomId, username });
+    gameSocket.emit("join", { username: username, room: roomId });
     setIsWaiting(true);
+    setGameStarted(true);
   };
 
   const refreshLobbies = () => {
-    if (socket) {
+    if (!socket) {
+      const lobbySocket = initializeSocket();
+      lobbySocket.emit("get_lobbies");
+    } else {
       socket.emit("get_lobbies");
     }
   };
@@ -88,12 +162,17 @@ export default function MultiplayerSetup() {
   const handleLeaveLobby = () => {
     if (window.confirm("Leave and close lobby?")) {
       if (socket && room) {
+        console.log("Leaving lobby:", { room, username });
         socket.emit("leave_lobby", { roomId: room, username });
       }
       setGameStarted(false);
       setIsWaiting(false);
       setPlayerColor(null);
       setRoom("");
+      if (socket) {
+        socket.disconnect();
+        setSocket(null);
+      }
     }
   };
 
@@ -217,15 +296,15 @@ export default function MultiplayerSetup() {
               ) : (
                 lobbies.map((lobby) => (
                   <div 
-                    key={lobby.roomId}
+                    key={lobby.room}
                     className="flex justify-between items-center p-4 bg-gray-700 rounded-lg"
                   >
                     <div>
                       <p className="text-white font-semibold">Host: {lobby.host}</p>
-                      <p className="text-gray-400 text-sm">Room: {lobby.roomId}</p>
+                      <p className="text-gray-400 text-sm">Room: {lobby.room}</p>
                     </div>
                     <button
-                      onClick={() => handleJoinLobby(lobby.roomId)}
+                      onClick={() => handleJoinLobby(lobby.room)}
                       className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
                     >
                       Join
