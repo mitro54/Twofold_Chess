@@ -2,7 +2,7 @@ module.exports = {
   apps: [{
     name: 'twofold-chess-backend',
     script: 'dist/server.js',
-    instances: 'max',
+    instances: 2,
     exec_mode: 'cluster',
     autorestart: true,
     watch: false,
