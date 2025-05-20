@@ -40,17 +40,17 @@ interface GameboardProps {
 }
 
 const pieceSymbols: Record<string, string> = {
-  P: "♟",
+  P: "♙",
   p: "♟",
-  R: "♜",
+  R: "♖",
   r: "♜",
-  N: "♞",
+  N: "♘",
   n: "♞",
-  B: "♝",
+  B: "♗",
   b: "♝",
-  Q: "♛",
+  Q: "♕",
   q: "♛",
-  K: "♚",
+  K: "♔",
   k: "♚",
 };
 
