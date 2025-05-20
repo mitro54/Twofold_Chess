@@ -797,8 +797,9 @@ const handleSquareClick = (
       </h3>
 
       <div 
-        className="relative w-[400px] h-[400px] mt-2"
+        className="relative w-[400px] h-[400px] mt-2 touch-none"
         onTouchStart={handleTouchStart}
+        style={{ touchAction: 'manipulation' }}
       >
         <div
           className={`absolute inset-0 grid grid-cols-8 ${activeBoard === "main" ? "shadow-lg" : ""}`}

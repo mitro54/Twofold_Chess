@@ -51,16 +51,17 @@ const ChessBackground = () => {
 interface PageLayoutProps {
   children: React.ReactNode;
   title?: string;
+  titleClassName?: string;
 }
 
-const PageLayout: React.FC<PageLayoutProps> = ({ children, title }) => {
+const PageLayout: React.FC<PageLayoutProps> = ({ children, title, titleClassName }) => {
   return (
     <div className="relative min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-gray-900 to-black overflow-hidden">
       <ChessBackground />
       
-      <div className="relative z-10 text-center w-full max-w-4xl mx-auto px-4">
+      <div className="relative z-10 text-center w-full max-w-4xl mx-auto px-4 -mt-5">
         {title && (
-          <h1 className="text-7xl font-bold mb-16 bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 animate-gradient-x font-['Playfair_Display'] tracking-wider">
+          <h1 className={`text-7xl font-bold ${titleClassName || 'mb-40'} bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 animate-gradient-x font-['Playfair_Display'] tracking-wider`}>
             {title}
           </h1>
         )}

@@ -32,6 +32,7 @@ const HistoryPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [expandedGames, setExpandedGames] = useState<Set<number>>(new Set());
   const [stats, setStats] = useState<GameStats>({
     totalGames: 0,
     whiteWins: 0,
@@ -112,6 +113,18 @@ const HistoryPage: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const toggleGameExpansion = (index: number) => {
+    setExpandedGames(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(index)) {
+        newSet.delete(index);
+      } else {
+        newSet.add(index);
+      }
+      return newSet;
+    });
+  };
+
   if (loading) {
     return (
       <PageLayout>
@@ -121,15 +134,15 @@ const HistoryPage: React.FC = () => {
   }
 
   return (
-    <PageLayout title="Games History">
+    <PageLayout title="Games History" titleClassName="mt-8 mb-8">
       <div className="w-full">
-        <div className="flex justify-between items-end mb-6">
-          <ReturnToMainMenu />
-          <button
-            onClick={() => signOut()}
+      <div className="flex justify-between items-end mb-6">
+      <ReturnToMainMenu />
+        <button
+          onClick={() => signOut()}
             className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-red-500/30 hover:border-red-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(239,68,68,0.3)] hover:shadow-[0_0_20px_rgba(239,68,68,0.5)] flex items-center justify-center min-w-[160px] group"
-          >
-            <span className="bg-gradient-to-r from-red-400 to-pink-400 bg-clip-text text-transparent group-hover:from-red-300 group-hover:to-pink-300 transition-colors flex items-center gap-2">
+        >
+            <span className="text-red-400 group-hover:text-red-300 transition-colors flex items-center gap-2">
               <FaDoorOpen className="text-red-400 group-hover:text-red-300 transition-colors" size={18} />
               Logout
             </span>
@@ -183,8 +196,8 @@ const HistoryPage: React.FC = () => {
             >
               <FaFilter />
               Filters
-            </button>
-          </div>
+        </button>
+      </div>
 
           {showFilters && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-gray-900/80 backdrop-blur-sm rounded-lg border border-purple-500/30">
@@ -231,104 +244,122 @@ const HistoryPage: React.FC = () => {
         </div>
 
         {filteredGames.length === 0 ? (
-          <div className="text-center">
+        <div className="text-center">
             <p className="text-lg font-semibold text-white">No games found matching your criteria.</p>
-            <p className="text-sm text-gray-400 mt-2">
+          <p className="text-sm text-gray-400 mt-2">
               Try adjusting your search or filters.
-            </p>
-          </div>
-        ) : (
-          <>
+          </p>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-4 justify-center">
             {currentGames.map((game, index) => (
-              <div
-                key={index}
-                className="mb-8 p-4 bg-gray-900/80 backdrop-blur-sm rounded-lg border border-indigo-500/30"
-              >
-                <div className="flex flex-wrap gap-4 justify-between items-center">
-                  <div>
-                    <p className="font-semibold text-lg text-white">
-                      <span className="text-gray-400">Room:</span>{" "}
-                      {game.room === "local" ? "Local Game" : game.room}
-                    </p>
-                    <p className="font-semibold text-lg text-white">
-                      <span className="text-gray-400">Winner:</span> {game.winner}
-                    </p>
-                    <p className="font-semibold text-lg text-white">
-                      <span className="text-gray-400">Checkmate Board:</span>{" "}
+            <div
+              key={index}
+                className="mb-8 p-4 bg-gray-900/80 backdrop-blur-sm rounded-lg border border-indigo-500/30 w-full md:w-[calc(50%-1rem)] shadow-[0_0_15px_rgba(99,102,241,0.3)] hover:shadow-[0_0_20px_rgba(99,102,241,0.5)] transition-all duration-300"
+            >
+              <div className="flex flex-col gap-2">
+                <div>
+                    <p className="font-semibold text-lg text-white text-left">
+                    <span className="text-gray-400">Room:</span>{" "}
+                    {game.room === "local" ? "Local Game" : game.room}
+                  </p>
+                    <p className="font-semibold text-lg text-white text-left">
+                    <span className="text-gray-400">Winner:</span> {game.winner}
+                  </p>
+                    <p className="font-semibold text-lg text-white text-left">
+                    <span className="text-gray-400">Checkmate Board:</span>{" "}
                       {game.checkmate_board ? game.checkmate_board : "Draw - No checkmate"}
                     </p>
-                    <p className="font-semibold text-lg text-white">
+                    <p className="font-semibold text-lg text-white text-left">
                       <span className="text-gray-400">End Reason:</span>{" "}
                       {game.end_reason}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-4">
-                  <h2 className="text-lg font-bold mb-2 text-white">Moves:</h2>
-                  <ul className="list-decimal pl-6 text-gray-200">
-                    {game.moves.map((move, moveIndex) => (
-                      <li key={moveIndex}>{move}</li>
-                    ))}
-                  </ul>
+                  </p>
                 </div>
               </div>
-            ))}
 
-            {/* Pagination Controls */}
-            <div className="flex justify-center items-center gap-4 mt-8 mb-4">
-              <button
-                onClick={() => handlePageChange(currentPage - 1)}
-                disabled={currentPage === 1}
-                className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                  currentPage === 1
-                    ? "bg-gray-800/80 text-gray-500 cursor-not-allowed"
-                    : "bg-gray-900/80 backdrop-blur-sm text-white hover:bg-gray-800/80 border border-indigo-500/30 hover:border-indigo-400/50 transition-all duration-300"
-                }`}
-              >
-                <FaChevronLeft />
-                Previous
-              </button>
-              
-              <div className="flex items-center gap-2">
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+              <div className="mt-4">
+                  <h2 className="text-lg font-bold mb-2 text-white text-left">Moves:</h2>
+                <ul className="list-decimal pl-6 text-gray-200 text-left">
+                  {game.moves.slice(0, expandedGames.has(index) ? undefined : 10).map((move, moveIndex) => (
+                    <li key={moveIndex} className="text-left">{move}</li>
+                  ))}
+                </ul>
+                {game.moves.length > 10 && (
                   <button
-                    key={page}
-                    onClick={() => handlePageChange(page)}
-                    className={`w-8 h-8 rounded-lg ${
-                      currentPage === page
-                        ? "bg-indigo-600 text-white"
-                        : "bg-gray-900/80 backdrop-blur-sm text-white hover:bg-gray-800/80 border border-indigo-500/30 hover:border-indigo-400/50 transition-all duration-300"
-                    }`}
+                    onClick={() => toggleGameExpansion(index)}
+                    className="mt-2 text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-2 text-sm"
                   >
-                    {page}
+                    {expandedGames.has(index) ? (
+                      <>
+                        Show Less
+                        <FaChevronLeft className="transform rotate-90" />
+                      </>
+                    ) : (
+                      <>
+                        Show More ({game.moves.length - 10} more moves)
+                        <FaChevronLeft className="transform -rotate-90" />
+                      </>
+                    )}
                   </button>
-                ))}
+                )}
               </div>
-
-              <button
-                onClick={() => handlePageChange(currentPage + 1)}
-                disabled={currentPage === totalPages}
-                className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-                  currentPage === totalPages
-                    ? "bg-gray-800/80 text-gray-500 cursor-not-allowed"
-                    : "bg-gray-900/80 backdrop-blur-sm text-white hover:bg-gray-800/80 border border-indigo-500/30 hover:border-indigo-400/50 transition-all duration-300"
-                }`}
-              >
-                Next
-                <FaChevronRight />
-              </button>
             </div>
-          </>
-        )}
+          ))}
+        </div>
+      )}
+
+      {/* Pagination Controls */}
+      <div className="flex justify-center items-center gap-4 mt-8 mb-4 w-full">
+        <button
+          onClick={() => handlePageChange(currentPage - 1)}
+          disabled={currentPage === 1}
+          className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+            currentPage === 1
+              ? "bg-gray-800/80 text-gray-500 cursor-not-allowed"
+              : "bg-gray-900/80 backdrop-blur-sm text-white hover:bg-gray-800/80 border border-indigo-500/30 hover:border-indigo-400/50 transition-all duration-300"
+          }`}
+        >
+          <FaChevronLeft />
+          Previous
+        </button>
+        
+        <div className="flex items-center gap-2">
+          {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+            <button
+              key={page}
+              onClick={() => handlePageChange(page)}
+              className={`w-8 h-8 rounded-lg ${
+                currentPage === page
+                  ? "bg-indigo-600 text-white"
+                  : "bg-gray-900/80 backdrop-blur-sm text-white hover:bg-gray-800/80 border border-indigo-500/30 hover:border-indigo-400/50 transition-all duration-300"
+              }`}
+            >
+              {page}
+            </button>
+          ))}
+        </div>
+
+        <button
+          onClick={() => handlePageChange(currentPage + 1)}
+          disabled={currentPage === totalPages}
+          className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
+            currentPage === totalPages
+              ? "bg-gray-800/80 text-gray-500 cursor-not-allowed"
+              : "bg-gray-900/80 backdrop-blur-sm text-white hover:bg-gray-800/80 border border-indigo-500/30 hover:border-indigo-400/50 transition-all duration-300"
+          }`}
+        >
+          Next
+          <FaChevronRight />
+        </button>
       </div>
+    </div>
     </PageLayout>
   );
 };
 
 export const getServerSideProps: GetServerSideProps = async (context) => {
   const session = await getSession(context);
-
+  
   if (!session) {
     return {
       redirect: {
