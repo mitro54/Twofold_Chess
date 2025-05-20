@@ -8,7 +8,12 @@
     "dev": "nodemon src/server.ts",
     "build": "tsc",
     "lint": "eslint . --ext .ts",
-    "test": "jest"
+    "test": "jest",
+    "prod:start": "pm2 start ecosystem.config.js",
+    "prod:stop": "pm2 stop ecosystem.config.js",
+    "prod:restart": "pm2 restart ecosystem.config.js",
+    "prod:logs": "pm2 logs",
+    "prod:monitor": "pm2 monit"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -16,6 +21,7 @@
     "express-rate-limit": "^7.1.5",
     "helmet": "^7.1.0",
     "mongoose": "^8.0.3",
+    "pm2": "^5.3.1",
     "socket.io": "^4.7.2",
     "winston": "^3.11.0"
   },

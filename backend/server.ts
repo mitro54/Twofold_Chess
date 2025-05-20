@@ -9,6 +9,7 @@ import { setupSocketHandlers } from "./src/socket/socketHandlers";
 import { connectDB } from "./src/database/connection";
 import { errorHandler } from "./src/middleware/errorHandler";
 import { logger } from "./src/utils/logger";
+import healthRoutes from "./src/routes/health";
 
 const app = express();
 const httpServer = createServer(app);
@@ -28,6 +29,9 @@ const limiter = rateLimit({
   message: 'Too many requests from this IP, please try again later.',
 });
 app.use(limiter);
+
+// Health check routes
+app.use('/', healthRoutes);
 
 // Socket.IO setup with production settings
 const io = new Server(httpServer, {
