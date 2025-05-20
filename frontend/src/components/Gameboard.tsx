@@ -702,28 +702,28 @@ const handleSquareClick = (
         return (
           <div
             key={`square-${boardType}-${rowIndex}-${colIndex}`}
-            onClick={() => !isDisabled && handleSquareClick(rowIndex, colIndex, boardType)} // Prevent click if disabled
-            className={`w-[50px] h-[50px] flex items-center justify-center relative transition-all duration-150 ease-in-out 
+            onClick={() => !isDisabled && handleSquareClick(rowIndex, colIndex, boardType)}
+            className={`aspect-square w-full h-full flex items-center justify-center relative transition-all duration-150 ease-in-out 
               ${isBlackSquare ? colors.dark : colors.light} 
               ${isCurrentSelectedPieceSquare ? "ring-2 ring-red-500 ring-inset" : ""}
               ${(isDisabled) ? "opacity-50 cursor-not-allowed" : "cursor-pointer"} 
-              ${isBoardResolved ? "filter grayscale(70%) opacity-60" : ""} // Extra styling for resolved boards
+              ${isBoardResolved ? "filter grayscale(70%) opacity-60" : ""}
               `}
             title={titleText}
           >
             {isPossibleMoveTarget && (
-              <div className="absolute w-full h-full bg-green-400 opacity-40 rounded-sm pointer-events-none"></div>
+              <div className="absolute inset-0 bg-green-400 opacity-40 rounded-sm pointer-events-none"></div>
             )}
             {isPossibleMoveTarget && !boardData[rowIndex][colIndex] && (
-              <div className="absolute w-3 h-3 bg-green-700 opacity-50 rounded-full pointer-events-none"></div>
+              <div className="absolute w-3 h-3 md:w-4 md:h-4 lg:w-5 lg:h-5 bg-green-700 opacity-50 rounded-full pointer-events-none"></div>
             )}
             {isPossibleMoveTarget && boardData[rowIndex][colIndex] && (
-              <div className="absolute w-[80%] h-[80%] border-4 border-green-600 opacity-70 rounded-full pointer-events-none"></div>
+              <div className="absolute inset-[10%] border-4 border-green-600 opacity-70 rounded-full pointer-events-none"></div>
             )}
 
             {piece && (
               <span
-                className={`text-3xl font-bold leading-none z-10 ${
+                className={`text-3xl md:text-4xl lg:text-5xl font-bold leading-none z-10 ${
                   piece.toUpperCase() === piece ? "text-white" : "text-black"
                 }`}
               >
@@ -772,32 +772,32 @@ const handleSquareClick = (
 
   return (
     <div className="flex flex-col items-center select-none">
-      <h2 className="text-2xl font-bold mb-4 text-gray-600">Room: {roomFromProps}</h2>
-      <div className="relative h-8 mb-1 flex items-center justify-center">
+      <h2 className="text-2xl font-bold mb-1 mt-4 md:mb-1 md:mt-6 text-gray-600 break-all text-center px-4">Room: {roomFromProps}</h2>
+      <div className="relative h-6 mb-1 flex items-center justify-center px-4">
         {respondingToCheckBoard && (
-          <p className="absolute text-lg text-red-700 font-bold animate-pulse whitespace-nowrap">
+          <p className="absolute text-sm md:text-lg text-red-700 font-bold animate-pulse whitespace-nowrap">
             {turn} must respond to check on the {respondingToCheckBoard} board!
           </p>
         )}
       </div>
-      <div className="relative h-6 mb-3 flex items-center justify-center gap-4">
+      <div className="relative h-4 mb-1 flex items-center justify-center gap-2">
         {mainBoardOutcome !== "active" && (
-          <p className="text-sm text-red-600 font-semibold whitespace-nowrap">
+          <p className="text-xs md:text-sm text-red-600 font-semibold whitespace-nowrap">
             Main Board: {mainBoardOutcome.replace("_"," ")}
           </p>
         )}
         {secondaryBoardOutcome !== "active" && (
-          <p className="text-sm text-blue-600 font-semibold whitespace-nowrap">
+          <p className="text-xs md:text-sm text-blue-600 font-semibold whitespace-nowrap">
             Secondary Board: {secondaryBoardOutcome.replace("_"," ")}
           </p>
         )}
       </div>
-      <h3 className="text-xl font-semibold mb-2 text-indigo-700">
+      <h3 className="text-lg md:text-xl font-semibold mb-1 text-indigo-700">
         {gameFinished ? `Game Over: ${winner || "Unknown Result"}` : `${turn}'s turn on the ${serverActiveBoardPhase} board`}
       </h3>
 
       <div 
-        className="relative w-[400px] h-[400px] mt-2 touch-none"
+        className="relative w-[min(400px,90vw)] h-[min(400px,90vw)] md:w-[600px] md:h-[600px] touch-none"
         onTouchStart={handleTouchStart}
         style={{ touchAction: 'manipulation' }}
       >
@@ -883,11 +883,11 @@ const handleSquareClick = (
         </div>
       )}
 
-      <p className="text-lg text-gray-600 mt-4 hidden md:block">Press Spacebar to swap boards</p>
-      <div className="flex flex-col sm:flex-row gap-4 mt-4">
+      <p className="text-lg text-gray-600 mt-2 hidden md:block">Press Spacebar to swap boards</p>
+      <div className="flex flex-row gap-2 mt-2">
         <button
           onClick={resetBoard}
-          className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-blue-500/30 hover:border-blue-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(59,130,246,0.3)] hover:shadow-[0_0_20px_rgba(59,130,246,0.5)] flex items-center justify-center min-w-[160px] group"
+          className="px-4 py-2 sm:px-6 sm:py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-blue-500/30 hover:border-blue-400/50 transition-all duration-300 transform hover:scale-105 text-sm sm:text-base font-semibold shadow-[0_0_15px_rgba(59,130,246,0.3)] hover:shadow-[0_0_20px_rgba(59,130,246,0.5)] flex items-center justify-center min-w-[140px] sm:min-w-[180px] group"
         >
           <span className="bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent group-hover:from-blue-300 group-hover:to-cyan-300 transition-colors">
             Reset Both Boards
@@ -895,7 +895,7 @@ const handleSquareClick = (
         </button>
         <button
           onClick={() => setShowDebugMenu(!showDebugMenu)}
-          className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-purple-500/30 hover:border-purple-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(168,85,247,0.3)] hover:shadow-[0_0_20px_rgba(168,85,247,0.5)] flex items-center justify-center min-w-[160px] group"
+          className="px-4 py-2 sm:px-6 sm:py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-purple-500/30 hover:border-purple-400/50 transition-all duration-300 transform hover:scale-105 text-sm sm:text-base font-semibold shadow-[0_0_15px_rgba(168,85,247,0.3)] hover:shadow-[0_0_20px_rgba(168,85,247,0.5)] flex items-center justify-center min-w-[140px] sm:min-w-[180px] group"
         >
           <span className="bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent group-hover:from-purple-300 group-hover:to-pink-300 transition-colors">
             Debug Menu
