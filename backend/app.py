@@ -20,6 +20,7 @@ from original_helpers import (
 )
 import chess
 import logging
+import random
 
 
 
@@ -695,43 +696,57 @@ def on_join(data):
             "is_responding_to_check_on_board": None,
             "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
             "en_passant_target": {"main": None, "secondary": None},
+            "players": [username],
+            "player_colors": {}
         }
         games_collection.insert_one(game_state)
         print(f"New game state created for room {room}: {game_state}")
+        # First player gets random color
+        color = "White" if random.random() < 0.5 else "Black"
+        game_state["player_colors"][username] = color
+        games_collection.update_one(
+            {"room": room},
+            {"$set": {"player_colors": game_state["player_colors"]}}
+        )
+        emit("game_start", {"color": color}, room=room)
     else:
-        if "active_board_phase" not in game_state:
-            print(f"Migrating existing game state for room {room} to include active_board_phase.")
-            # Ensure 'turn' also exists, defaulting to 'White' if not
-            current_turn = game_state.get("turn", "White")
+        # Second player joins
+        if len(game_state.get("players", [])) < 2:
+            # Second player gets opposite color of first player
+            first_player = game_state["players"][0]
+            first_player_color = game_state["player_colors"][first_player]
+            second_player_color = "Black" if first_player_color == "White" else "White"
+            
+            game_state["players"].append(username)
+            game_state["player_colors"][username] = second_player_color
+            
             games_collection.update_one(
-                {"_id": game_state["_id"]},
-                {"$set": {
-                    "active_board_phase": "main", 
-                    "turn": current_turn,
-                    "is_responding_to_check_on_board": None, # Ensure it's added on migration
-                    "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
-                    "en_passant_target": {"main": None, "secondary": None}
-                }}
+                {"room": room},
+                {
+                    "$set": {
+                        "players": game_state["players"],
+                        "player_colors": game_state["player_colors"]
+                    }
+                }
             )
-            game_state["active_board_phase"] = "main"
-            game_state["turn"] = current_turn
-            game_state["is_responding_to_check_on_board"] = None
-            game_state["castling_rights"] = {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}}
-            game_state["en_passant_target"] = {"main": None, "secondary": None}
+            
+            # Notify both players
+            emit("player_joined", {"color": second_player_color}, room=room)
+            emit("game_start", {"color": first_player_color}, room=room)
+        else:
+            emit("error", {"message": "Room is full"})
+            return
 
     if not game_state: # Should be extremely rare
         print(f"CRITICAL: game_state for room {room} is None after create/find attempt.")
         return
 
     # Ensure the game_state sent to the client includes all necessary fields
-    # This will be the game_state from DB, which now includes the new fields if newly created
-    # or if fetched after a reset.
     final_game_state_for_client = games_collection.find_one({"room": room})
     if final_game_state_for_client: # Should always exist here
         emit("game_state", serialize_game_state(final_game_state_for_client), room=room)
         print(f"Player {username} joined room {room}. Game state sent.")
     else:
-        # This case should ideally not happen if insert_one or update_one in reset worked
         print(f"ERROR: Game state not found for room {room} after join/creation attempt.")
 
 
