@@ -4,6 +4,7 @@ import ReturnToMainMenu from "../components/ReturnToMainMenu";
 import { v4 as uuidv4 } from "uuid";
 import PageLayout from "../components/PageLayout";
 import { io, Socket } from "socket.io-client";
+import environment from "../config/environment";
 
 interface Lobby {
   roomId: string;
@@ -22,15 +23,18 @@ export default function MultiplayerSetup() {
   const [socket, setSocket] = useState<Socket | null>(null);
 
   useEffect(() => {
-    const newSocket = io(process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5001");
-    setSocket(newSocket);
+    const socket = io(environment.apiUrl, {
+      transports: ['websocket'],
+      autoConnect: false,
+    });
+    setSocket(socket);
 
-    newSocket.on("lobby_list", (lobbyList: Lobby[]) => {
+    socket.on("lobby_list", (lobbyList: Lobby[]) => {
       setLobbies(lobbyList);
     });
 
     return () => {
-      newSocket.disconnect();
+      socket.disconnect();
     };
   }, []);
 
