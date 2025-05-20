@@ -37,6 +37,8 @@ interface MoveErrorData {
 interface GameboardProps {
   username?: string | undefined;
   room?: string | undefined;
+  playerColor?: "White" | "Black" | null;
+  isBlackPlayer?: boolean;
 }
 
 const pieceSymbols: Record<string, string> = {
@@ -72,12 +74,17 @@ const createInitialBoard = (isWhiteBottom: boolean): Array<Array<string | null>>
 };
 
 
-const Gameboard: React.FC<GameboardProps> = ({ username: propsUsername, room: propsRoom }) => {
+const Gameboard: React.FC<GameboardProps> = ({ 
+  username: propsUsername, 
+  room: propsRoom,
+  playerColor,
+  isBlackPlayer = false 
+}) => {
   const usernameFromProps = propsUsername ?? "LocalPlayer";
   const roomFromProps = propsRoom ?? "local_game_room";
 
-  const [mainBoard, setMainBoard] = useState<ChessBoardType>(createInitialBoard(true));
-  const [secondaryBoard, setSecondaryBoard] = useState<ChessBoardType>(createInitialBoard(true));
+  const [mainBoard, setMainBoard] = useState<ChessBoardType>(createInitialBoard(!isBlackPlayer));
+  const [secondaryBoard, setSecondaryBoard] = useState<ChessBoardType>(createInitialBoard(!isBlackPlayer));
   const [activeBoard, setActiveBoard] = useState<"main" | "secondary">("main");
   const [serverActiveBoardPhase, setServerActiveBoardPhase] = useState<"main" | "secondary">("main");
   const [selectedPieceSquare, setSelectedPieceSquare] = useState<Position | null>(null);
@@ -774,7 +781,10 @@ const handleSquareClick = (
 
   return (
     <div className="flex flex-col items-center select-none">
-      <h2 className="text-2xl font-bold mb-1 mt-4 md:mb-1 md:mt-6 text-gray-600 break-all text-center px-4">Room: {roomFromProps}</h2>
+      <h2 className="text-2xl font-bold mb-1 mt-4 md:mb-1 md:mt-6 text-gray-600 break-all text-center px-4">
+        Room: {roomFromProps}
+        {playerColor && ` - You are playing as ${playerColor}`}
+      </h2>
       <div className="relative h-6 mb-1 flex items-center justify-center px-4">
         {respondingToCheckBoard && (
           <p className="absolute text-sm md:text-lg text-red-700 font-bold animate-pulse whitespace-nowrap">

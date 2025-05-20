@@ -21,6 +21,8 @@ export default function MultiplayerSetup() {
   const [lobbies, setLobbies] = useState<Lobby[]>([]);
   const [isPrivate, setIsPrivate] = useState(false);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [playerColor, setPlayerColor] = useState<"White" | "Black" | null>(null);
 
   useEffect(() => {
     const socket = io(environment.apiUrl, {
@@ -31,6 +33,16 @@ export default function MultiplayerSetup() {
 
     socket.on("lobby_list", (lobbyList: Lobby[]) => {
       setLobbies(lobbyList);
+    });
+
+    socket.on("player_joined", (data: { color: "White" | "Black" }) => {
+      setPlayerColor(data.color);
+      setIsWaiting(false);
+    });
+
+    socket.on("game_start", (data: { color: "White" | "Black" }) => {
+      setPlayerColor(data.color);
+      setIsWaiting(false);
     });
 
     return () => {
@@ -52,6 +64,7 @@ export default function MultiplayerSetup() {
         host: username,
         isPrivate: isPrivate
       });
+      setIsWaiting(true);
     }
     setGameStarted(true);
   };
@@ -63,6 +76,7 @@ export default function MultiplayerSetup() {
     }
     setRoom(roomId);
     setGameStarted(true);
+    setIsWaiting(true);
   };
 
   const refreshLobbies = () => {
@@ -71,14 +85,51 @@ export default function MultiplayerSetup() {
     }
   };
 
+  const handleLeaveLobby = () => {
+    if (window.confirm("Leave and close lobby?")) {
+      if (socket && room) {
+        socket.emit("leave_lobby", { roomId: room, username });
+      }
+      setGameStarted(false);
+      setIsWaiting(false);
+      setPlayerColor(null);
+      setRoom("");
+    }
+  };
+
   if (gameStarted) {
     return (
       <PageLayout>
         <div className="w-full">
-        <Gameboard username={username} room={room} />
+          {isWaiting ? (
+            <div className="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-gray-800 p-8 rounded-lg shadow-lg text-center relative">
+                <button
+                  className="absolute top-2 right-2 text-gray-400 hover:text-white text-2xl font-bold focus:outline-none"
+                  onClick={handleLeaveLobby}
+                  aria-label="Close waiting modal"
+                >
+                  ×
+                </button>
+                <h2 className="text-2xl font-bold text-white mb-4">Waiting for Opponent</h2>
+                <p className="text-gray-300 mb-4">Share this room code with your friend:</p>
+                <div className="bg-gray-700 p-4 rounded-lg mb-4">
+                  <code className="text-xl font-mono text-white">{room}</code>
+                </div>
+                <p className="text-gray-400">Waiting for someone to join...</p>
+              </div>
+            </div>
+          ) : (
+            <Gameboard 
+              username={username} 
+              room={room} 
+              playerColor={playerColor}
+              isBlackPlayer={playerColor === "Black"}
+            />
+          )}
           <div className="mt-8 flex justify-center">
-        <ReturnToMainMenu />
-      </div>
+            <ReturnToMainMenu />
+          </div>
         </div>
       </PageLayout>
     );
