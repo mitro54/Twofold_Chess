@@ -2,9 +2,11 @@ import { Button } from "@heroui/react";
 import { useState } from "react";
 import { useRouter } from "next/router";
 import PageLayout from "../components/PageLayout";
+import AboutModal from "../components/AboutModal";
 
 export default function Home() {
   const [showGameOptions, setShowGameOptions] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
   const router = useRouter();
 
   const handlePlayGame = () => {
@@ -45,6 +47,14 @@ export default function Home() {
                   See History
                 </span>
               </Button>
+              <Button
+                className="w-full sm:w-auto px-3 sm:px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-blue-500/30 hover:border-blue-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(59,130,246,0.3)] hover:shadow-[0_0_20px_rgba(59,130,246,0.5)] flex items-center justify-center min-w-[60px] sm:min-w-[140px] group"
+                onClick={() => setShowAboutModal(true)}
+              >
+                <span className="bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent group-hover:from-blue-300 group-hover:to-cyan-300 transition-colors">
+                  About
+                </span>
+              </Button>
             </>
           ) : (
             <>
@@ -57,11 +67,11 @@ export default function Home() {
                 </span>
               </Button>
               <Button
-                className="w-full sm:w-auto px-3 sm:px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-blue-500/30 hover:border-blue-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(59,130,246,0.3)] hover:shadow-[0_0_20px_rgba(59,130,246,0.5)] flex items-center justify-center min-w-[60px] sm:min-w-[140px] group"
+                className="w-full sm:w-auto px-3 sm:px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-yellow-500/30 hover:border-yellow-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(234,179,8,0.3)] hover:shadow-[0_0_20px_rgba(234,179,8,0.5)] flex items-center justify-center min-w-[60px] sm:min-w-[140px] group"
                 onClick={handlePlayWithFriend}
               >
-                <span className="bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent group-hover:from-blue-300 group-hover:to-cyan-300 transition-colors">
-                  Play with a Friend
+                <span className="bg-gradient-to-r from-yellow-400 to-amber-400 bg-clip-text text-transparent group-hover:from-yellow-300 group-hover:to-amber-300 transition-colors">
+                  Play with Friend
                 </span>
               </Button>
             </>
@@ -81,6 +91,8 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      <AboutModal isOpen={showAboutModal} onClose={() => setShowAboutModal(false)} />
     </PageLayout>
   );
 }
