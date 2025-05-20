@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { signOut } from "next-auth/react";
-import { FaDoorOpen, FaSearch, FaFilter, FaChevronLeft, FaChevronRight } from "react-icons/fa";
+import { FaDoorOpen, FaSearch, FaFilter, FaChevronLeft, FaChevronRight, FaDownload } from "react-icons/fa";
 import { GetServerSideProps } from "next";
 import { getSession } from "next-auth/react";
 import ReturnToMainMenu from "../components/ReturnToMainMenu";
@@ -125,6 +125,58 @@ const HistoryPage: React.FC = () => {
     });
   };
 
+  const downloadGameHistory = () => {
+    // Prepare the dataset
+    const dataset = games.map(game => ({
+      // Game metadata
+      room_id: game.room,
+      winner: game.winner,
+      checkmate_board: game.checkmate_board,
+      end_reason: game.end_reason,
+      
+      // Game statistics
+      total_moves: game.moves.length,
+      white_moves: game.moves.filter((_, i) => i % 2 === 0).length,
+      black_moves: game.moves.filter((_, i) => i % 2 === 1).length,
+      
+      // Move sequence (encoded for ML)
+      moves: game.moves.map((move, index) => ({
+        move_number: Math.floor(index / 2) + 1,
+        player: index % 2 === 0 ? 'white' : 'black',
+        move: move,
+        is_checkmate_move: index === game.moves.length - 1 && game.end_reason === 'checkmate',
+        is_capture: move.includes('x'),
+        is_castling: move.includes('O-O'),
+        is_promotion: move.includes('='),
+        is_check: move.includes('+'),
+      })),
+      
+      // Game outcome features
+      outcome: {
+        winner: game.winner,
+        checkmate_board: game.checkmate_board,
+        end_reason: game.end_reason,
+        is_checkmate: game.end_reason === 'checkmate',
+        is_stalemate: game.end_reason === 'stalemate',
+        is_draw: game.winner === 'Draw',
+      }
+    }));
+
+    // Create the file content
+    const fileContent = JSON.stringify(dataset, null, 2);
+    const blob = new Blob([fileContent], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    // Create and trigger download
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `chess_games_dataset_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   if (loading) {
     return (
       <PageLayout>
@@ -136,18 +188,29 @@ const HistoryPage: React.FC = () => {
   return (
     <PageLayout title="Games History" titleClassName="mt-8 mb-8">
       <div className="w-full">
-      <div className="flex justify-between items-end mb-6">
-      <ReturnToMainMenu />
-        <button
-          onClick={() => signOut()}
-            className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-red-500/30 hover:border-red-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(239,68,68,0.3)] hover:shadow-[0_0_20px_rgba(239,68,68,0.5)] flex items-center justify-center min-w-[160px] group"
-        >
-            <span className="text-red-400 group-hover:text-red-300 transition-colors flex items-center gap-2">
-              <FaDoorOpen className="text-red-400 group-hover:text-red-300 transition-colors" size={18} />
-              Logout
+      <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mb-6">
+        <div className="flex flex-col sm:flex-row gap-4 items-center">
+          <ReturnToMainMenu />
+          <button
+            onClick={downloadGameHistory}
+            className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-green-500/30 hover:border-green-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(34,197,94,0.3)] hover:shadow-[0_0_20px_rgba(34,197,94,0.5)] flex items-center justify-center min-w-[160px] group"
+          >
+            <span className="text-green-400 group-hover:text-green-300 transition-colors flex items-center gap-2">
+              <FaDownload className="text-green-400 group-hover:text-green-300 transition-colors" size={18} />
+              Download Dataset
             </span>
           </button>
         </div>
+        <button
+          onClick={() => signOut()}
+          className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-red-500/30 hover:border-red-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(239,68,68,0.3)] hover:shadow-[0_0_20px_rgba(239,68,68,0.5)] flex items-center justify-center min-w-[160px] group"
+        >
+          <span className="text-red-400 group-hover:text-red-300 transition-colors flex items-center gap-2">
+            <FaDoorOpen className="text-red-400 group-hover:text-red-300 transition-colors" size={18} />
+            Logout
+          </span>
+        </button>
+      </div>
 
         {/* Statistics Section */}
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-8 p-4 bg-gray-900/80 backdrop-blur-sm rounded-lg border border-indigo-500/30">
