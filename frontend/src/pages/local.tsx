@@ -22,7 +22,7 @@ export default function LocalGame() {
   return (
     <PageLayout>
       <div className="w-full">
-      <Gameboard room={localRoomId} username="Local Player" />
+      <Gameboard room={localRoomId} socket={null} />
         <div className="mt-8 flex justify-center">
       <ReturnToMainMenu />
     </div>

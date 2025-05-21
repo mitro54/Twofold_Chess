@@ -1,7 +1,7 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from "react";
-import { io, Socket } from "socket.io-client";
+import { Socket } from "socket.io-client";
 import environment from "../config/environment";
 import {
   getValidMoves,
@@ -36,10 +36,9 @@ interface MoveErrorData {
 }
 
 interface GameboardProps {
-  username?: string | undefined;
   room?: string | undefined;
   playerColor?: "White" | "Black" | null;
-  isBlackPlayer?: boolean;
+  socket: Socket | null;
 }
 
 const pieceSymbols: Record<string, string> = {
@@ -76,16 +75,17 @@ const createInitialBoard = (isWhiteBottom: boolean): Array<Array<string | null>>
 
 
 const Gameboard: React.FC<GameboardProps> = ({ 
-  username: propsUsername, 
   room: propsRoom,
   playerColor,
-  isBlackPlayer = false 
+  socket
 }) => {
-  const usernameFromProps = propsUsername ?? "LocalPlayer";
   const roomFromProps = propsRoom ?? "local_game_room";
 
-  const [mainBoard, setMainBoard] = useState<ChessBoardType>(createInitialBoard(!isBlackPlayer));
-  const [secondaryBoard, setSecondaryBoard] = useState<ChessBoardType>(createInitialBoard(!isBlackPlayer));
+  // Use myColor for orientation and UI, set from socket events
+  const [myColor, setMyColor] = useState<"White" | "Black" | null>(playerColor ?? null);
+  const isPlayerBlack = myColor === "Black";
+  const [mainBoard, setMainBoard] = useState<ChessBoardType>(createInitialBoard(!isPlayerBlack));
+  const [secondaryBoard, setSecondaryBoard] = useState<ChessBoardType>(createInitialBoard(!isPlayerBlack));
   const [activeBoard, setActiveBoard] = useState<"main" | "secondary">("main");
   const [serverActiveBoardPhase, setServerActiveBoardPhase] = useState<"main" | "secondary">("main");
   const [selectedPieceSquare, setSelectedPieceSquare] = useState<Position | null>(null);
@@ -97,8 +97,8 @@ const Gameboard: React.FC<GameboardProps> = ({
   const [showCheckmateModal, setShowCheckmateModal] = useState(false);
   const [gameEndMessage, setGameEndMessage] = useState("");
   const [winner, setWinner] = useState<"White" | "Black" | "Draw" | null>(null);
-  const [socket, setSocket] = useState<Socket | null>(null);
   const visualUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const boardSwapTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const [mainBoardOutcome, setMainBoardOutcome] = useState<string>("active");
   const [secondaryBoardOutcome, setSecondaryBoardOutcome] = useState<string>("active");
@@ -141,6 +141,13 @@ const Gameboard: React.FC<GameboardProps> = ({
   const [lastTapPosition, setLastTapPosition] = useState<{ x: number; y: number } | null>(null);
   const DOUBLE_TAP_DELAY = 300; // milliseconds
   const DOUBLE_TAP_DISTANCE = 50; // pixels
+
+  const [isManualBoardSwitch, setIsManualBoardSwitch] = useState(false);
+  const manualSwitchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [boardOpacity, setBoardOpacity] = useState({
+    main: 1,
+    secondary: 1
+  });
 
   // Helper to determine castling rights and eligible rooks for the selected king
   const getCastlingOptions = (
@@ -204,34 +211,20 @@ const Gameboard: React.FC<GameboardProps> = ({
   };
   
 
+  /** keep the visible board in sync with the phase sent by the server */
   useEffect(() => {
-    if (activeBoard === serverActiveBoardPhase) {
-      if (visualUpdateTimeoutRef.current) {
-        clearTimeout(visualUpdateTimeoutRef.current);
-        visualUpdateTimeoutRef.current = null;
+    if (activeBoard !== serverActiveBoardPhase) {
+      // Only sync if there's no pending board swap and it's not a manual switch
+      if (!boardSwapTimeoutRef.current && !isManualBoardSwitch) {
+        console.log(
+          `Syncing active board from ${activeBoard} to ${serverActiveBoardPhase}`
+        );
+        setActiveBoard(serverActiveBoardPhase);
+        setSelectedPieceSquare(null);
+        setPossibleMoves([]);
       }
-      return;
     }
-
-    if (visualUpdateTimeoutRef.current) {
-      clearTimeout(visualUpdateTimeoutRef.current);
-    }
-    console.log(`EFFECT: serverActiveBoardPhase (${serverActiveBoardPhase}) !== activeBoard (${activeBoard}). Setting timeout to sync.`);
-    visualUpdateTimeoutRef.current = setTimeout(() => {
-      console.log(`EFFECT TIMEOUT: Setting activeBoard to ${serverActiveBoardPhase}`);
-      setActiveBoard(serverActiveBoardPhase);
-      visualUpdateTimeoutRef.current = null;
-    }, 500);
-
-    return () => {
-      if (visualUpdateTimeoutRef.current) {
-        clearTimeout(visualUpdateTimeoutRef.current);
-        visualUpdateTimeoutRef.current = null;
-      }
-    };
-  },
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  [serverActiveBoardPhase]);
+  }, [serverActiveBoardPhase, activeBoard, isManualBoardSwitch]);
 
   useEffect(() => {
     if (socket) {
@@ -246,6 +239,10 @@ const Gameboard: React.FC<GameboardProps> = ({
         if (visualUpdateTimeoutRef.current) {
             clearTimeout(visualUpdateTimeoutRef.current);
             visualUpdateTimeoutRef.current = null;
+        }
+        if (boardSwapTimeoutRef.current) {
+            clearTimeout(boardSwapTimeoutRef.current);
+            boardSwapTimeoutRef.current = null;
         }
         setMoveHistory(data.moves || []);
         setGameFinished(data.game_over || false);
@@ -270,150 +267,185 @@ const Gameboard: React.FC<GameboardProps> = ({
     };
   }, [socket]);  
 
+  /** keep myColour in sync with prop from MultiplayerSetup */
   useEffect(() => {
-    console.log(`FRONTEND: Initializing socket effect. Username: ${usernameFromProps}, Room: ${roomFromProps}`);
-    const newSocketInstance = io(environment.apiUrl, {
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-      timeout: 10000,
-      autoConnect: true
-    });
+    if (playerColor) {
+      setMyColor(playerColor);
+      const isBlack = playerColor === "Black";
+      setMainBoard(createInitialBoard(!isBlack));
+      setSecondaryBoard(createInitialBoard(!isBlack));
+    }
+  }, [playerColor]);
 
-    newSocketInstance.on('connect', () => {
-      console.log('Socket connected successfully');
-      setSocket(newSocketInstance);
-      console.log(`FRONTEND: Emitting 'join' for room: ${roomFromProps}`);
-      newSocketInstance.emit("join", { username: usernameFromProps, room: roomFromProps });
-    });
+  // Add effect to handle game state updates
+  useEffect(() => {
+    if (!socket) return;
 
-    newSocketInstance.on('connect_error', (error) => {
-      console.error('Socket connection error:', error);
-      alert('Failed to connect to game server. Please try again.');
-    });
+    const handleGameState = (data: GameStateData) => {
+      console.log("Game state update received:", JSON.stringify(data, null, 2));
+      if (data) {
+        // Force React to recognize the state change by creating new arrays
+        const newMainBoard = data.mainBoard.map(row => [...row]);
+        const newSecondaryBoard = data.secondaryBoard.map(row => [...row]);
+        
+        console.log("Updating boards:", {
+          mainBoard: newMainBoard,
+          secondaryBoard: newSecondaryBoard,
+          turn: data.turn,
+          phase: data.active_board_phase,
+          isManualSwitch: isManualBoardSwitch
+        });
 
-    newSocketInstance.on('disconnect', (reason) => {
-      console.log('Socket disconnected:', reason);
-      if (reason === 'io server disconnect') {
-        alert('Disconnected from server. Please refresh the page.');
-      }
-    });
-
-    newSocketInstance.on("game_state", (data: GameStateData) => {
-      console.log("FRONTEND: game_state event HANDLER ENTERED. Data:", data ? JSON.parse(JSON.stringify(data)) : 'No data received');
-      setMainBoard(data.mainBoard);
-      setSecondaryBoard(data.secondaryBoard);
-      setTurn(data.turn || "White");
-      const currentPhase = data.active_board_phase || "main";
-      setServerActiveBoardPhase(currentPhase);
-      setActiveBoard(currentPhase); 
-      if (visualUpdateTimeoutRef.current) {
-        clearTimeout(visualUpdateTimeoutRef.current);
-        visualUpdateTimeoutRef.current = null;
-      }
-      setMoveHistory(data.moves || []);
-      setSelectedPieceSquare(null);
-      setPossibleMoves([]);
-      setGameFinished(data.game_over || false); 
-      setShowCheckmateModal(false);    
-      setWinner(data.winner || null); 
-      setMainBoardOutcome(data.main_board_outcome || "active");
-      setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
-      setRespondingToCheckBoard(data.is_responding_to_check_on_board || null);
-      setEnPassantTarget(data.en_passant_target ?? { main: null, secondary: null });
-      setCastlingRights(data.castling_rights ?? null);
-
-
-      if (data.game_over) {
-        let endMsg = `Game Over.`;
-        if (data.winner === "Draw") {
-          endMsg = "The game is a Draw!";
-        } else if (data.winner) {
-          endMsg = `${data.winner} wins the game!`;
-        }
-        setGameEndMessage(endMsg);
-        setShowCheckmateModal(true);
-      }
-    });
-  
-    newSocketInstance.on("game_update", (data: GameStateData) => {
-      if (!data || !data.mainBoard || !data.secondaryBoard) {
-        console.error("FRONTEND ERROR: Invalid game_update data received:", data);
-        return;
-      }
-      console.log("FRONTEND: game_update received:", JSON.parse(JSON.stringify(data)));
-    
-      setMainBoard(data.mainBoard);
-      setSecondaryBoard(data.secondaryBoard);
-      setTurn(data.turn || "White");
-      setServerActiveBoardPhase(data.active_board_phase || "main");
-      setMoveHistory(data.moves || []);
-      setWinner(data.winner || null);
-      setGameFinished(data.game_over || false);
-      setMainBoardOutcome(data.main_board_outcome || "active");
-      setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
-      setRespondingToCheckBoard(data.is_responding_to_check_on_board || null);
-      setEnPassantTarget(data.en_passant_target ?? { main: null, secondary: null });
-      
-      setSelectedPieceSquare(null);
-      setPossibleMoves([]);
-      setCastlingRights(data.castling_rights ?? null);
-
-      if (data.game_over && !showCheckmateModal) {
-        let endMsg = `Game Over.`;
-        if (data.winner === "Draw") {
-          endMsg = "The game is a Draw!";
-        } else if (data.winner) {
-          endMsg = `${data.winner} wins the game!`;
+        setMainBoard(newMainBoard);
+        setSecondaryBoard(newSecondaryBoard);
+        setTurn(data.turn);
+        const currentPhase = data.active_board_phase || "main";
+        setServerActiveBoardPhase(currentPhase);
+        
+        // Update board opacity with delay
+        if (currentPhase === "main") {
+          setBoardOpacity({
+            main: 1,
+            secondary: 0.1
+          });
         } else {
-           if (data.main_board_outcome === "draw_stalemate" && data.secondary_board_outcome === "draw_stalemate") {
-            endMsg = "The game is a Draw due to stalemate on both boards!";
-           } else {
-            endMsg = "The game has concluded.";
-           }
+          setBoardOpacity({
+            main: 0.1,
+            secondary: 1
+          });
         }
-        console.log(`FRONTEND: Game ended by server. Message: ${endMsg}`);
-        setGameEndMessage(endMsg);
-        setShowCheckmateModal(true); 
+        
+        // Only update active board if it's different from current phase and not a manual switch
+        if (activeBoard !== currentPhase && !isManualBoardSwitch) {
+          // Clear any existing timeouts
+          if (boardSwapTimeoutRef.current) {
+            clearTimeout(boardSwapTimeoutRef.current);
+          }
+          
+          // Set new timeout to swap boards after 0.8 seconds
+          boardSwapTimeoutRef.current = setTimeout(() => {
+            setActiveBoard(currentPhase);
+            setSelectedPieceSquare(null);
+            setPossibleMoves([]);
+            boardSwapTimeoutRef.current = null; // Clear the ref after timeout
+          }, 800);
+        }
+        
+        setMoveHistory(data.moves || []);
+        setGameFinished(data.game_over || false);
+        setWinner(data.winner || null);
+        setMainBoardOutcome(data.main_board_outcome || "active");
+        setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
+        setRespondingToCheckBoard(data.is_responding_to_check_on_board || null);
+        setEnPassantTarget(data.en_passant_target ?? { main: null, secondary: null });
+        setCastlingRights(data.castling_rights ?? { White: { K: true, Q: true }, Black: { K: true, Q: true } });
+        
+        // Clear selection after move
+        setSelectedPieceSquare(null);
+        setPossibleMoves([]);
+        setCastlingCandidate(null);
       }
-    });    
+    };
 
-    newSocketInstance.on("move_error", (errorData: MoveErrorData) => {
-      alert(`Error: ${errorData.message}`);
-    });    
+    // Listen for all game state updates
+    socket.on("game_state", handleGameState);
+    socket.on("game_update", handleGameState);
+    socket.on("move_made", handleGameState);
 
+    // Only request initial game state on mount
+    socket.emit("get_game_state", { room: roomFromProps });
+
+    return () => {
+      socket.off("game_state", handleGameState);
+      socket.off("game_update", handleGameState);
+      socket.off("move_made", handleGameState);
+      if (boardSwapTimeoutRef.current) {
+        clearTimeout(boardSwapTimeoutRef.current);
+      }
+      if (manualSwitchTimeoutRef.current) {
+        clearTimeout(manualSwitchTimeoutRef.current);
+      }
+    };
+  }, [socket, roomFromProps, activeBoard, isManualBoardSwitch]);
+
+  /** show server-side move errors */
+  useEffect(() => {
+    if (!socket) return;
+    const handleMoveError = (err: MoveErrorData) =>
+      alert(`Error: ${err.message}`);
+    socket.on("move_error", handleMoveError);
+    return () => {
+      socket.off("move_error", handleMoveError);
+    };
+  }, [socket]);
+
+  // Add spacebar event listener
+  useEffect(() => {
     const handleKeyPress = (event: KeyboardEvent) => {
-      if (event.code === "Space") {
+      if (event.code === 'Space' && !showPromotionModal) {
         event.preventDefault();
         if (visualUpdateTimeoutRef.current) {
-          console.log("SPACEBAR: Clearing pending visual update timeout.");
           clearTimeout(visualUpdateTimeoutRef.current);
           visualUpdateTimeoutRef.current = null;
         }
-        setActiveBoard(prev => {
-          const nextBoard = prev === "main" ? "secondary" : "main";
-          console.log(`SPACEBAR: Toggling activeBoard from ${prev} to ${nextBoard}`);
-          return nextBoard;
-        });
+        if (boardSwapTimeoutRef.current) {
+          clearTimeout(boardSwapTimeoutRef.current);
+          boardSwapTimeoutRef.current = null;
+        }
+        if (manualSwitchTimeoutRef.current) {
+          clearTimeout(manualSwitchTimeoutRef.current);
+          manualSwitchTimeoutRef.current = null;
+        }
+        setIsManualBoardSwitch(true);
+        setActiveBoard(prev => prev === "main" ? "secondary" : "main");
         setSelectedPieceSquare(null);
         setPossibleMoves([]);
+        // Reset manual switch flag after a longer delay
+        manualSwitchTimeoutRef.current = setTimeout(() => {
+          setIsManualBoardSwitch(false);
+          manualSwitchTimeoutRef.current = null;
+        }, 1000);
       }
     };
 
-    window.addEventListener("keydown", handleKeyPress);
-
+    window.addEventListener('keydown', handleKeyPress);
     return () => {
-      console.log(`FRONTEND: Disconnecting socket for room: ${roomFromProps}`);
-      newSocketInstance.disconnect();
-      window.removeEventListener("keydown", handleKeyPress);
-      if (visualUpdateTimeoutRef.current) {
-        clearTimeout(visualUpdateTimeoutRef.current);
-        visualUpdateTimeoutRef.current = null;
+      window.removeEventListener('keydown', handleKeyPress);
+      if (manualSwitchTimeoutRef.current) {
+        clearTimeout(manualSwitchTimeoutRef.current);
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [usernameFromProps, roomFromProps, gameFinished]);
+  }, [showPromotionModal]);
+
+  // Add effect to handle board swapping after moves
+  useEffect(() => {
+    if (socket) {
+      const handleMoveComplete = () => {
+        // Clear any existing timeout
+        if (boardSwapTimeoutRef.current) {
+          clearTimeout(boardSwapTimeoutRef.current);
+        }
+        
+        // Set new timeout to swap boards after 0.5 seconds
+        boardSwapTimeoutRef.current = setTimeout(() => {
+          setActiveBoard(prev => prev === "main" ? "secondary" : "main");
+          setSelectedPieceSquare(null);
+          setPossibleMoves([]);
+        }, 500);
+      };
+
+      socket.on("move_made", handleMoveComplete);
+      socket.on("game_update", handleMoveComplete);
+
+      return () => {
+        socket.off("move_made", handleMoveComplete);
+        socket.off("game_update", handleMoveComplete);
+        if (boardSwapTimeoutRef.current) {
+          clearTimeout(boardSwapTimeoutRef.current);
+        }
+      };
+    }
+  }, [socket]);
 
   const resetBoard = async () => {
     console.log("FRONTEND: Resetting board for room:", roomFromProps);
@@ -465,18 +497,58 @@ const handleSquareClick = (
   // Block all input if promotion modal is open
   if (showPromotionModal) return;
 
+  // Clear any existing board swap timeout
+  if (boardSwapTimeoutRef.current) {
+    clearTimeout(boardSwapTimeoutRef.current);
+    boardSwapTimeoutRef.current = null;
+  }
+
   /* ------------------------------------------------------------------ *
    *      EARLY OUTS – same as before (trimmed for brevity)             *
    * ------------------------------------------------------------------ */
   const boardOutcome =
     boardClicked === "main" ? mainBoardOutcome : secondaryBoardOutcome;
+  
+  // Add debug logging
+  console.log("Move attempt:", {
+    boardOutcome,
+    socket: !!socket,
+    gameFinished,
+    boardClicked,
+    activeBoard,
+    serverActiveBoardPhase,
+    turn,
+    myColor,
+    isPlayerBlack,
+    currentMainBoard: mainBoard,
+    currentSecondaryBoard: secondaryBoard
+  });
+
   if (
     boardOutcome !== "active" ||
     !socket ||
     gameFinished ||
     boardClicked !== activeBoard ||
-    boardClicked !== serverActiveBoardPhase
+    boardClicked !== serverActiveBoardPhase ||
+    !myColor || // Check if color is assigned
+    turn !== myColor // Check if it's player's turn
   ) {
+    console.log("Move blocked:", {
+      boardOutcome,
+      socket: !!socket,
+      gameFinished,
+      boardClicked,
+      activeBoard,
+      serverActiveBoardPhase,
+      turn,
+      myColor,
+      isPlayerBlack,
+      reason: !myColor ? "No color assigned" : 
+              turn !== myColor ? "Not your turn" :
+              boardClicked !== activeBoard ? "Wrong active board" :
+              boardClicked !== serverActiveBoardPhase ? "Wrong server phase" :
+              "Other reason"
+    });
     return;
   }
 
@@ -690,30 +762,23 @@ const handleSquareClick = (
     colors: { light: string; dark: string },
     boardType: "main" | "secondary"
   ) => {
-    if (boardType === serverActiveBoardPhase) {
-       console.log(`FRONTEND RENDER getBoardState: Rendering ACTIVE boardType="${boardType}".`);
-    }
-
-    return boardData.map((rowItem, rowIndex) =>
-      rowItem.map((piece, colIndex) => {
-        const isBlackSquare = (rowIndex + colIndex) % 2 === 1;
-        const isCurrentSelectedPieceSquare = selectedPieceSquare?.row === rowIndex && selectedPieceSquare?.col === colIndex && boardType === serverActiveBoardPhase;
+    // Fix: Flip board based on player color
+    const displayRows = isPlayerBlack ? [...boardData].reverse() : boardData;
+    return displayRows.map((rowItem, rowIndex) => {
+      const actualRow = isPlayerBlack ? 7 - rowIndex : rowIndex;
+      const displayCols = isPlayerBlack ? [...rowItem].reverse() : rowItem;
+      return displayCols.map((piece, colIndex) => {
+        const actualCol = isPlayerBlack ? 7 - colIndex : colIndex;
+        const isBlackSquare = (actualRow + actualCol) % 2 === 1;
+        const isCurrentSelectedPieceSquare = selectedPieceSquare?.row === actualRow && selectedPieceSquare?.col === actualCol && boardType === serverActiveBoardPhase;
         
         const currentBoardOutcome = boardType === "main" ? mainBoardOutcome : secondaryBoardOutcome;
         const isBoardResolved = currentBoardOutcome !== "active";
-        // isDisabled is true if it's not the server's active phase for this board OR if the board itself is resolved.
         const isDisabled = (boardType !== serverActiveBoardPhase) || isBoardResolved;
 
         const isPossibleMoveTarget =
-        (
           possibleMoves.some(
-            (move) => move.row === rowIndex && move.col === colIndex
-          ) ||
-          (castlingCandidate &&
-            castlingCandidate.boardType === boardType &&
-            castlingCandidate.rooks.some(
-              (r) => r.pos.row === rowIndex && r.pos.col === colIndex
-            ))
+            (move) => move.row === actualRow && move.col === actualCol
         ) &&
         boardType === serverActiveBoardPhase &&
         !isBoardResolved;
@@ -729,8 +794,8 @@ const handleSquareClick = (
 
         return (
           <div
-            key={`square-${boardType}-${rowIndex}-${colIndex}`}
-            onClick={() => !isDisabled && handleSquareClick(rowIndex, colIndex, boardType)}
+            key={`square-${boardType}-${actualRow}-${actualCol}`}
+            onClick={() => !isDisabled && handleSquareClick(actualRow, actualCol, boardType)}
             className={`aspect-square w-full h-full flex items-center justify-center relative transition-all duration-150 ease-in-out 
               ${isBlackSquare ? colors.dark : colors.light} 
               ${isCurrentSelectedPieceSquare ? "ring-2 ring-red-500 ring-inset" : ""}
@@ -742,10 +807,10 @@ const handleSquareClick = (
             {isPossibleMoveTarget && (
               <div className="absolute inset-0 bg-green-400 opacity-40 rounded-sm pointer-events-none"></div>
             )}
-            {isPossibleMoveTarget && !boardData[rowIndex][colIndex] && (
+            {isPossibleMoveTarget && !boardData[actualRow][actualCol] && (
               <div className="absolute w-3 h-3 md:w-4 md:h-4 lg:w-5 lg:h-5 bg-green-700 opacity-50 rounded-full pointer-events-none"></div>
             )}
-            {isPossibleMoveTarget && boardData[rowIndex][colIndex] && (
+            {isPossibleMoveTarget && boardData[actualRow][actualCol] && (
               <div className="absolute inset-[10%] border-4 border-green-600 opacity-70 rounded-full pointer-events-none"></div>
             )}
 
@@ -762,12 +827,11 @@ const handleSquareClick = (
             )}
           </div>
         );
-      })
-    );
+      });
+    });
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
-    e.stopPropagation(); // Prevent event from bubbling up
     const touch = e.touches[0];
     const currentTime = new Date().getTime();
     const tapLength = currentTime - lastTapTime;
@@ -781,11 +845,19 @@ const handleSquareClick = (
       
       if (distance < DOUBLE_TAP_DISTANCE) {
         // Double tap detected
-        e.preventDefault(); // Prevent any default behavior
         if (visualUpdateTimeoutRef.current) {
           clearTimeout(visualUpdateTimeoutRef.current);
           visualUpdateTimeoutRef.current = null;
         }
+        if (boardSwapTimeoutRef.current) {
+          clearTimeout(boardSwapTimeoutRef.current);
+          boardSwapTimeoutRef.current = null;
+        }
+        if (manualSwitchTimeoutRef.current) {
+          clearTimeout(manualSwitchTimeoutRef.current);
+          manualSwitchTimeoutRef.current = null;
+        }
+        setIsManualBoardSwitch(true);
         setActiveBoard(prev => {
           const nextBoard = prev === "main" ? "secondary" : "main";
           console.log(`DOUBLE TAP: Toggling activeBoard from ${prev} to ${nextBoard}`);
@@ -793,6 +865,11 @@ const handleSquareClick = (
         });
         setSelectedPieceSquare(null);
         setPossibleMoves([]);
+        // Reset manual switch flag after a longer delay
+        manualSwitchTimeoutRef.current = setTimeout(() => {
+          setIsManualBoardSwitch(false);
+          manualSwitchTimeoutRef.current = null;
+        }, 1000);
       }
     }
     
@@ -804,7 +881,7 @@ const handleSquareClick = (
     <div className="flex flex-col items-center select-none">
       <h2 className="text-2xl font-bold mb-1 mt-4 md:mb-1 md:mt-6 text-gray-600 break-all text-center px-4">
         Room: {roomFromProps}
-        {playerColor && ` - You are playing as ${playerColor}`}
+        {myColor && ` - You are playing as ${myColor}`}
       </h2>
       <div className="relative h-6 mb-1 flex items-center justify-center px-4">
         {respondingToCheckBoard && (
@@ -839,9 +916,9 @@ const handleSquareClick = (
           style={{
             transform: activeBoard === "main" ? "none" : "translate(10px, 10px)",
             zIndex: activeBoard === "main" ? 2 : 1,
-            opacity: activeBoard === "main" ? 1 : (mainBoardOutcome !== "active" ? 0 : 0.2),
-            filter: activeBoard === "main" ? "none" : (mainBoardOutcome !== "active" ? "grayscale(90%)" : "grayscale(80%)"),
-            transition: "transform 0.3s ease-in-out, opacity 0.3s ease-in-out, filter 0.3s ease-in-out, box-shadow 0.3s ease-in-out",
+            opacity: activeBoard === "main" ? 1 : (mainBoardOutcome !== "active" ? 0 : boardOpacity.main),
+            filter: activeBoard === "main" ? "none" : (mainBoardOutcome !== "active" ? "grayscale(90%)" : "grayscale(90%)"),
+            transition: "transform 0.3s ease-in-out, opacity 0.8s ease-in-out, filter 0.8s ease-in-out, box-shadow 0.3s ease-in-out",
             boxShadow: activeBoard === "main" ? "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)" : "none",
           }}
         >
@@ -862,9 +939,9 @@ const handleSquareClick = (
           style={{
             transform: activeBoard === "secondary" ? "none" : "translate(10px, 10px)",
             zIndex: activeBoard === "secondary" ? 2 : 1,
-            opacity: activeBoard === "secondary" ? 1 : (secondaryBoardOutcome !== "active" ? 0.7 : 0.85),
-            filter: activeBoard === "secondary" ? "none" : (secondaryBoardOutcome !== "active" ? "grayscale(90%)" : "grayscale(80%)"),
-            transition: "transform 0.3s ease-in-out, opacity 0.3s ease-in-out, filter 0.3s ease-in-out, box-shadow 0.3s ease-in-out",
+            opacity: activeBoard === "secondary" ? 1 : (secondaryBoardOutcome !== "active" ? 0.7 : boardOpacity.secondary),
+            filter: activeBoard === "secondary" ? "none" : (secondaryBoardOutcome !== "active" ? "grayscale(90%)" : "grayscale(90%)"),
+            transition: "transform 0.3s ease-in-out, opacity 0.8s ease-in-out, filter 0.8s ease-in-out, box-shadow 0.3s ease-in-out",
             boxShadow: activeBoard === "secondary" ? "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)" : "none",
           }}
         >

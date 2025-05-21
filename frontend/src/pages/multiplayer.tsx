@@ -66,21 +66,33 @@ export default function MultiplayerSetup() {
 
     newSocket.on("error", (data: { message: string }) => {
       console.error("Game error:", data);
+      if (data.message === "Room already exists") {
+        // Try to join the room instead
+        console.log("Room exists, attempting to join instead.");
+        newSocket.emit("join", { username, room });
+        setIsWaiting(true);
+        setGameStarted(true);
+        return;
+      }
       alert(data.message);
       setGameStarted(false);
       setIsWaiting(false);
     });
 
-    newSocket.on("player_joined", (data: { color: "White" | "Black" }) => {
+    newSocket.on("player_joined", (data: { color: "White" | "Black"; username: string }) => {
       console.log("Player joined:", data);
-      setPlayerColor(data.color);
-      setIsWaiting(false);
-      setGameStarted(true);
+      if (data.username === username) {
+        setPlayerColor(data.color);
+        setIsWaiting(false);
+        setGameStarted(true);
+      }
     });
 
-    newSocket.on("game_start", (data: { color: "White" | "Black" }) => {
+    newSocket.on("game_start", (data: { color: "White" | "Black"; username: string }) => {
       console.log("Game started:", data);
-      setPlayerColor(data.color);
+      if (data.username === username) {
+        setPlayerColor(data.color);
+      }
       setIsWaiting(false);
       setGameStarted(true);
     });
@@ -116,6 +128,21 @@ export default function MultiplayerSetup() {
     };
   }, [socket]);
 
+  useEffect(() => {
+    if (!socket) return;
+
+    const colourHandler = (d: { color: "White" | "Black"; username: string }) =>
+      d.username === username && setPlayerColor(d.color);
+
+    socket.on("player_joined", colourHandler);
+    socket.on("game_start", colourHandler);
+
+    return () => {
+      socket.off("player_joined", colourHandler);
+      socket.off("game_start", colourHandler);
+    };
+  }, [socket, username]);
+
   const handleStartGame = () => {
     if (!username.trim()) {
       alert("Please enter a username.");
@@ -128,11 +155,11 @@ export default function MultiplayerSetup() {
     const gameSocket = initializeSocket();
     console.log("Creating lobby with:", { room, username, isPrivate });
     gameSocket.emit("create_lobby", {
-      roomId: room,
-      host: username,
-      isPrivate: isPrivate
-    });
-    setIsWaiting(true);
+        roomId: room,
+        host: username,
+        isPrivate: isPrivate
+      });
+      setIsWaiting(true);
     setGameStarted(true);
   };
 
@@ -200,10 +227,9 @@ export default function MultiplayerSetup() {
             </div>
           ) : (
             <Gameboard 
-              username={username} 
               room={room} 
               playerColor={playerColor}
-              isBlackPlayer={playerColor === "Black"}
+              socket={socket}
             />
           )}
           <div className="mt-8 flex justify-center">

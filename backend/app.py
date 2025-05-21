@@ -22,6 +22,7 @@ import chess
 import logging
 import random
 import datetime
+import time
 
 
 
@@ -109,6 +110,8 @@ def _check_threefold_repetition(fen_history):
 def serialize_game_state(game_state):
     if "_id" in game_state:
         game_state["_id"] = str(game_state["_id"])
+    if isinstance(game_state.get("createdAt"), datetime.datetime):
+        game_state["createdAt"] = int(game_state["createdAt"].timestamp() * 1000)
     return game_state
 
 
@@ -323,7 +326,7 @@ DEBUG_SCENARIOS = {
             b := create_empty_board(),
             b[0].__setitem__(0, "k"), # Black King a8
             b[2].__setitem__(0, "K"), # White King a6 (b2[0] is row 2, col 0)
-                                     # White Queen at c7 to control b8, b7, c8. (b[1][2] = 'Q')
+                                    # White Queen at c7 to control b8, b7, c8. (b[1][2] = 'Q')
             b[1].__setitem__(2, "Q"),
             b
         )[-1],
@@ -634,10 +637,10 @@ def setup_debug_scenario(scenario_name):
         m_outcome = game_doc["main_board_outcome"]
         s_outcome = game_doc["secondary_board_outcome"]
         if (m_outcome == "white_wins" and (s_outcome == "white_wins" or s_outcome == "draw_stalemate" or s_outcome == "active")) or \
-           (s_outcome == "white_wins" and (m_outcome == "white_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
+        (s_outcome == "white_wins" and (m_outcome == "white_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
             if not (m_outcome == "black_wins" or s_outcome == "black_wins"): game_doc["winner"] = "White"
         elif (m_outcome == "black_wins" and (s_outcome == "black_wins" or s_outcome == "draw_stalemate" or s_outcome == "active")) or \
-             (s_outcome == "black_wins" and (m_outcome == "black_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
+            (s_outcome == "black_wins" and (m_outcome == "black_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
             if not (m_outcome == "white_wins" or s_outcome == "white_wins"): game_doc["winner"] = "Black"
         elif m_outcome == "draw_stalemate" and s_outcome == "draw_stalemate":
             game_doc["winner"] = "Draw"
@@ -730,31 +733,38 @@ def on_join(data):
                 }
             )
             
-            # Notify both players
-            emit("player_joined", {"color": second_player_color}, room=room)
-            emit("game_start", {"color": first_player_color}, room=room)
-            logger.info(f"Second player {username} joined room {room} as {second_player_color}")
+            # Notify both players — now include the target username so
+            # each client can ignore the message meant for the other one.
+            emit(
+                "player_joined",
+                {"color": second_player_color, "username": username},
+                room=room,
+            )
+            emit(
+                "game_start",
+                {"color": first_player_color, "username": first_player},
+                room=room,
+            )
 
-        # Ensure the game_state sent to the client includes all necessary fields
-        final_game_state_for_client = games_collection.find_one({"room": room})
-        if final_game_state_for_client:
-            # Convert datetime to timestamp before sending
-            if isinstance(final_game_state_for_client.get("createdAt"), datetime.datetime):
-                final_game_state_for_client["createdAt"] = int(final_game_state_for_client["createdAt"].timestamp() * 1000)
-            emit("game_state", serialize_game_state(final_game_state_for_client), room=room)
-            logger.info(f"Game state sent to {username} in room {room}")
-        else:
-            logger.error(f"Game state not found for room {room} after join attempt")
+            logger.info(f"Second player {username} joined room {room} as {second_player_color}")
             
-        # Broadcast updated lobby list to all clients
-        lobbies = list(games_collection.find(
-            {"is_private": False, "players.1": {"$exists": False}},
-            {"room": 1, "host": 1, "is_private": 1, "createdAt": 1, "_id": 0}
-        ).sort("createdAt", -1))
-        for lobby in lobbies:
-            if isinstance(lobby.get("createdAt"), datetime.datetime):
-                lobby["createdAt"] = int(lobby["createdAt"].timestamp() * 1000)
-        socketio.emit("lobby_list", lobbies)
+            # Ensure the game_state sent to the client includes all necessary fields
+            final_game_state_for_client = games_collection.find_one({"room": room})
+            if final_game_state_for_client:
+                emit("game_state", serialize_game_state(final_game_state_for_client), room=room)
+                logger.info(f"Game state sent to {username} in room {room}")
+            else:
+                logger.error(f"Game state not found for room {room} after join attempt")
+            
+            # Broadcast updated lobby list to all clients
+            lobbies = list(games_collection.find(
+                {"is_private": False, "players.1": {"$exists": False}},
+                {"room": 1, "host": 1, "is_private": 1, "createdAt": 1, "_id": 0}
+            ).sort("createdAt", -1))
+            for lobby in lobbies:
+                if isinstance(lobby.get("createdAt"), datetime.datetime):
+                    lobby["createdAt"] = int(lobby["createdAt"].timestamp() * 1000)
+            socketio.emit("lobby_list", lobbies)
     except Exception as e:
         logger.error(f"Error joining game: {str(e)}")
         emit("error", {"message": "Failed to join game"})
@@ -789,15 +799,6 @@ def on_leave_lobby(data):
                 if not game_state["players"]:
                     logger.info(f"Deleting empty room {room}")
                     games_collection.delete_one({"room": room})
-                    # Broadcast updated lobby list to all clients
-                    lobbies = list(games_collection.find(
-                        {"is_private": False, "players.1": {"$exists": False}},
-                        {"room": 1, "host": 1, "is_private": 1, "createdAt": 1, "_id": 0}
-                    ).sort("createdAt", -1))
-                    for lobby in lobbies:
-                        if isinstance(lobby.get("createdAt"), datetime.datetime):
-                            lobby["createdAt"] = int(lobby["createdAt"].timestamp() * 1000)
-                    socketio.emit("lobby_list", lobbies)
                 else:
                     games_collection.update_one(
                         {"room": room},
@@ -811,6 +812,16 @@ def on_leave_lobby(data):
                     logger.info(f"Updated game state after {username} left")
         
         emit("player_left", {"username": username}, room=room)
+        
+        # Always broadcast updated lobby list after any leave event
+        lobbies = list(games_collection.find(
+            {"is_private": False, "players.1": {"$exists": False}},
+            {"room": 1, "host": 1, "is_private": 1, "createdAt": 1, "_id": 0}
+        ).sort("createdAt", -1))
+        for lobby in lobbies:
+            if isinstance(lobby.get("createdAt"), datetime.datetime):
+                lobby["createdAt"] = int(lobby["createdAt"].timestamp() * 1000)
+        socketio.emit("lobby_list", lobbies)
     except Exception as e:
         logger.error(f"Error leaving game: {str(e)}")
         emit("error", {"message": "Failed to leave game"})
@@ -868,6 +879,9 @@ def on_create_lobby(data):
             emit("error", {"message": "Room already exists"})
             return
 
+        # Randomly assign host's color
+        host_color = random.choice(["White", "Black"])
+
         # Create initial game state
         initial_board = create_initial_board()
         current_time = datetime.datetime.utcnow()
@@ -877,7 +891,7 @@ def on_create_lobby(data):
             "is_private": is_private,
             "createdAt": current_time,
             "players": [host],
-            "player_colors": {host: "White"},
+            "player_colors": {host: host_color},
             "mainBoard": initial_board,
             "secondaryBoard": initial_board,
             "turn": "White",
@@ -895,7 +909,7 @@ def on_create_lobby(data):
 
         # Insert the new game state
         games_collection.insert_one(game_state)
-        logger.info(f"Created new lobby: {room_id} by {host}")
+        logger.info(f"Created new lobby: {room_id} by {host} as {host_color}")
 
         # Join the room
         join_room(room_id)
@@ -1107,7 +1121,7 @@ def on_move(data):
 
     # Update castling rights
     cr = {"White": {"K": board.has_kingside_castling_rights(chess.WHITE), "Q": board.has_queenside_castling_rights(chess.WHITE)},
-          "Black": {"K": board.has_kingside_castling_rights(chess.BLACK), "Q": board.has_queenside_castling_rights(chess.BLACK)}}
+        "Black": {"K": board.has_kingside_castling_rights(chess.BLACK), "Q": board.has_queenside_castling_rights(chess.BLACK)}}
     game_doc["castling_rights"] = cr
 
     # Convert back to array, preserving IDs
@@ -1309,17 +1323,17 @@ def on_move(data):
     s_outcome = game_doc["secondary_board_outcome"]
     if not game_doc.get("winner"):
         if (m_outcome == "white_wins" and (s_outcome == "white_wins" or s_outcome == "draw_stalemate" or s_outcome == "active")) or \
-           (s_outcome == "white_wins" and (m_outcome == "white_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
+        (s_outcome == "white_wins" and (m_outcome == "white_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
             if not (m_outcome == "black_wins" or s_outcome == "black_wins"):
                 game_doc["winner"] = "White"
         elif (m_outcome == "black_wins" and (s_outcome == "black_wins" or s_outcome == "draw_stalemate" or s_outcome == "active")) or \
-             (s_outcome == "black_wins" and (m_outcome == "black_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
+            (s_outcome == "black_wins" and (m_outcome == "black_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
             if not (m_outcome == "white_wins" or s_outcome == "white_wins"):
                 game_doc["winner"] = "Black"
         elif m_outcome == "draw_stalemate" and s_outcome == "draw_stalemate":
             game_doc["winner"] = "Draw"
         elif (m_outcome == "draw_stalemate" and s_outcome == "active" and not has_any_legal_moves(game_doc["secondaryBoard"], game_doc["turn"])) or \
-             (s_outcome == "draw_stalemate" and m_outcome == "active" and not has_any_legal_moves(game_doc["mainBoard"], game_doc["turn"])):
+            (s_outcome == "draw_stalemate" and m_outcome == "active" and not has_any_legal_moves(game_doc["mainBoard"], game_doc["turn"])):
             if m_outcome == "draw_stalemate" and s_outcome == "active":
                 game_doc["secondary_board_outcome"] = "draw_stalemate"
                 s_outcome = "draw_stalemate"
@@ -1382,7 +1396,26 @@ def on_finish_game(data):
 
 
 
+def cleanup_stale_rooms():
+    """Clean up rooms that have been empty for too long"""
+    try:
+        # Find rooms with no players or only one player that haven't been updated recently
+        stale_time = datetime.datetime.utcnow() - datetime.timedelta(hours=1)
+        result = games_collection.delete_many({
+            "$or": [
+                {"players": []},
+                {"players.1": {"$exists": False}, "createdAt": {"$lt": stale_time}}
+            ]
+        })
+        if result.deleted_count > 0:
+            logger.info(f"Cleaned up {result.deleted_count} stale rooms")
+    except Exception as e:
+        logger.error(f"Error cleaning up stale rooms: {str(e)}")
+
+# Add cleanup call to the main execution block
 if __name__ == "__main__":
+    # Initial cleanup
+    cleanup_stale_rooms()
     socketio.run(app, host="0.0.0.0", port=5001)
 
 @socketio.on('connect')
