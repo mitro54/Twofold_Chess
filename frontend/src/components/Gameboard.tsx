@@ -219,7 +219,7 @@ const Gameboard: React.FC<GameboardProps> = ({
         console.log(
           `Syncing active board from ${activeBoard} to ${serverActiveBoardPhase}`
         );
-        setActiveBoard(serverActiveBoardPhase);
+      setActiveBoard(serverActiveBoardPhase);
         setSelectedPieceSquare(null);
         setPossibleMoves([]);
       }
@@ -299,8 +299,8 @@ const Gameboard: React.FC<GameboardProps> = ({
         setMainBoard(newMainBoard);
         setSecondaryBoard(newSecondaryBoard);
         setTurn(data.turn);
-        const currentPhase = data.active_board_phase || "main";
-        setServerActiveBoardPhase(currentPhase);
+      const currentPhase = data.active_board_phase || "main";
+      setServerActiveBoardPhase(currentPhase);
         
         // Update board opacity with delay
         if (currentPhase === "main") {
@@ -320,7 +320,7 @@ const Gameboard: React.FC<GameboardProps> = ({
           // Clear any existing timeouts
           if (boardSwapTimeoutRef.current) {
             clearTimeout(boardSwapTimeoutRef.current);
-          }
+      }
           
           // Set new timeout to swap boards after 0.8 seconds
           boardSwapTimeoutRef.current = setTimeout(() => {
@@ -331,18 +331,18 @@ const Gameboard: React.FC<GameboardProps> = ({
           }, 800);
         }
         
-        setMoveHistory(data.moves || []);
-        setGameFinished(data.game_over || false);
+      setMoveHistory(data.moves || []);
+      setGameFinished(data.game_over || false);
         setWinner(data.winner || null);
-        setMainBoardOutcome(data.main_board_outcome || "active");
-        setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
-        setRespondingToCheckBoard(data.is_responding_to_check_on_board || null);
-        setEnPassantTarget(data.en_passant_target ?? { main: null, secondary: null });
+      setMainBoardOutcome(data.main_board_outcome || "active");
+      setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
+      setRespondingToCheckBoard(data.is_responding_to_check_on_board || null);
+      setEnPassantTarget(data.en_passant_target ?? { main: null, secondary: null });
         setCastlingRights(data.castling_rights ?? { White: { K: true, Q: true }, Black: { K: true, Q: true } });
-        
+      
         // Clear selection after move
-        setSelectedPieceSquare(null);
-        setPossibleMoves([]);
+      setSelectedPieceSquare(null);
+      setPossibleMoves([]);
         setCastlingCandidate(null);
       }
     };
@@ -364,7 +364,7 @@ const Gameboard: React.FC<GameboardProps> = ({
       }
       if (manualSwitchTimeoutRef.current) {
         clearTimeout(manualSwitchTimeoutRef.current);
-      }
+           }
     };
   }, [socket, roomFromProps, activeBoard, isManualBoardSwitch]);
 
@@ -437,13 +437,13 @@ const Gameboard: React.FC<GameboardProps> = ({
       socket.on("move_made", handleMoveComplete);
       socket.on("game_update", handleMoveComplete);
 
-      return () => {
+    return () => {
         socket.off("move_made", handleMoveComplete);
         socket.off("game_update", handleMoveComplete);
         if (boardSwapTimeoutRef.current) {
           clearTimeout(boardSwapTimeoutRef.current);
-        }
-      };
+      }
+    };
     }
   }, [socket]);
 
@@ -524,14 +524,17 @@ const handleSquareClick = (
     currentSecondaryBoard: secondaryBoard
   });
 
+  // Check if we're in multiplayer mode and it's not the player's turn
+  const isMultiplayerMode = playerColor !== null;
+  const isPlayerTurn = !isMultiplayerMode || turn === myColor;
+
   if (
     boardOutcome !== "active" ||
     !socket ||
     gameFinished ||
     boardClicked !== activeBoard ||
     boardClicked !== serverActiveBoardPhase ||
-    !myColor || // Check if color is assigned
-    turn !== myColor // Check if it's player's turn
+    !isPlayerTurn // Only check turn in multiplayer mode
   ) {
     console.log("Move blocked:", {
       boardOutcome,
@@ -543,8 +546,7 @@ const handleSquareClick = (
       turn,
       myColor,
       isPlayerBlack,
-      reason: !myColor ? "No color assigned" : 
-              turn !== myColor ? "Not your turn" :
+      reason: !isPlayerTurn ? "Not your turn" :
               boardClicked !== activeBoard ? "Wrong active board" :
               boardClicked !== serverActiveBoardPhase ? "Wrong server phase" :
               "Other reason"

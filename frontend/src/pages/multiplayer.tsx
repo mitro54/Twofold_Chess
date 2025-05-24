@@ -91,7 +91,7 @@ export default function MultiplayerSetup() {
     newSocket.on("game_start", (data: { color: "White" | "Black"; username: string }) => {
       console.log("Game started:", data);
       if (data.username === username) {
-        setPlayerColor(data.color);
+      setPlayerColor(data.color);
       }
       setIsWaiting(false);
       setGameStarted(true);
@@ -123,7 +123,7 @@ export default function MultiplayerSetup() {
     return () => {
       if (socket) {
         console.log("Cleaning up socket connection on unmount");
-        socket.disconnect();
+      socket.disconnect();
       }
     };
   }, [socket]);
