@@ -2,7 +2,7 @@ services:
   backend:
     build: ./backend
     ports:
-      - "5001:5001"
+      - "0.0.0.0:5001:5001"
     environment:
       - MONGO_URI=mongodb://mongo:27017/chess
     depends_on:
@@ -11,16 +11,17 @@ services:
   mongo:
     image: mongo:latest
     ports:
-      - "27017:27017"
+      - "0.0.0.0:27017:27017"
     volumes:
       - mongo_data:/data/db
 
   frontend:
     build: ./frontend
     ports:
-      - "3000:3000"
+      - "0.0.0.0:3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://backend:5001
+      - DOCKER_ENV=true
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
       - NEXTAUTH_URL=${NEXTAUTH_URL}

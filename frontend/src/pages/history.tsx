@@ -5,6 +5,7 @@ import { GetServerSideProps } from "next";
 import { getSession } from "next-auth/react";
 import ReturnToMainMenu from "../components/ReturnToMainMenu";
 import PageLayout from "../components/PageLayout";
+import environment from "../config/environment";
 
 interface Game {
   room: string;
@@ -57,7 +58,7 @@ const HistoryPage: React.FC = () => {
   useEffect(() => {
     const fetchGames = async () => {
       try {
-        const response = await fetch("http://localhost:5001/api/games");
+        const response = await fetch(`${environment.apiUrl}/api/games`);
         const data = await response.json();
         setGames(data);
         setFilteredGames(data);

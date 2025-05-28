@@ -4,3 +4,4 @@ Flask-Cors==3.0.10
 flask-socketio==5.3.3
 Werkzeug==2.0.3
 python-chess
+eventlet==0.33.3

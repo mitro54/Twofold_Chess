@@ -4,11 +4,12 @@ import ReturnToMainMenu from "../components/ReturnToMainMenu";
 import { v4 as uuidv4 } from "uuid";
 import PageLayout from "../components/PageLayout";
 import { io, Socket } from "socket.io-client";
+import environment from "../config/environment";
 
 interface Lobby {
-  roomId: string;
+  room: string;
   host: string;
-  isPrivate: boolean;
+  is_private: boolean;
   createdAt: number;
 }
 
@@ -20,19 +21,127 @@ export default function MultiplayerSetup() {
   const [lobbies, setLobbies] = useState<Lobby[]>([]);
   const [isPrivate, setIsPrivate] = useState(false);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [playerColor, setPlayerColor] = useState<"White" | "Black" | null>(null);
 
-  useEffect(() => {
-    const newSocket = io(process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5001");
-    setSocket(newSocket);
+  // Function to initialize socket connection
+  const initializeSocket = () => {
+    if (socket) {
+      console.log("Socket already exists, cleaning up");
+      socket.disconnect();
+    }
+
+    console.log("Initializing new socket connection at:", environment.apiUrl);
+    const newSocket = io(environment.apiUrl, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      timeout: 10000,
+      autoConnect: true,
+    });
+
+    newSocket.on("connect", () => {
+      console.log("Socket connected successfully");
+      // Refresh lobbies when connected
+      newSocket.emit("get_lobbies");
+    });
+
+    newSocket.on("connect_error", (error) => {
+      console.error("Socket connection error:", error);
+      alert("Failed to connect to game server. Please try again.");
+    });
+
+    newSocket.on("disconnect", (reason) => {
+      console.log("Socket disconnected:", reason);
+      if (reason === "io server disconnect") {
+        alert("Disconnected from server. Please refresh the page.");
+      }
+    });
 
     newSocket.on("lobby_list", (lobbyList: Lobby[]) => {
+      console.log("Received lobby list:", lobbyList);
       setLobbies(lobbyList);
     });
 
+    newSocket.on("error", (data: { message: string }) => {
+      console.error("Game error:", data);
+      if (data.message === "Room already exists") {
+        // Try to join the room instead
+        console.log("Room exists, attempting to join instead.");
+        newSocket.emit("join", { username, room });
+        setIsWaiting(true);
+        setGameStarted(true);
+        return;
+      }
+      alert(data.message);
+      setGameStarted(false);
+      setIsWaiting(false);
+    });
+
+    newSocket.on("player_joined", (data: { color: "White" | "Black"; username: string }) => {
+      console.log("Player joined:", data);
+      if (data.username === username) {
+        setPlayerColor(data.color);
+        setIsWaiting(false);
+        setGameStarted(true);
+      }
+    });
+
+    newSocket.on("game_start", (data: { color: "White" | "Black"; username: string }) => {
+      console.log("Game started:", data);
+      if (data.username === username) {
+      setPlayerColor(data.color);
+      }
+      setIsWaiting(false);
+      setGameStarted(true);
+    });
+
+    newSocket.on("game_state", (state) => {
+      console.log("Received game state:", state);
+    });
+
+    newSocket.on("player_left", (data: { username: string }) => {
+      console.log("Player left:", data);
+      if (data.username === username) {
+        setGameStarted(false);
+        setIsWaiting(false);
+        setPlayerColor(null);
+        setRoom("");
+        // Clean up socket when player leaves
+        newSocket.disconnect();
+        setSocket(null);
+      }
+    });
+
+    setSocket(newSocket);
+    return newSocket;
+  };
+
+  // Clean up socket on component unmount
+  useEffect(() => {
     return () => {
-      newSocket.disconnect();
+      if (socket) {
+        console.log("Cleaning up socket connection on unmount");
+      socket.disconnect();
+      }
     };
-  }, []);
+  }, [socket]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const colourHandler = (d: { color: "White" | "Black"; username: string }) =>
+      d.username === username && setPlayerColor(d.color);
+
+    socket.on("player_joined", colourHandler);
+    socket.on("game_start", colourHandler);
+
+    return () => {
+      socket.off("player_joined", colourHandler);
+      socket.off("game_start", colourHandler);
+    };
+  }, [socket, username]);
 
   const handleStartGame = () => {
     if (!username.trim()) {
@@ -40,15 +149,17 @@ export default function MultiplayerSetup() {
       return;
     }
     if (!room.trim()) {
-      setRoom(uuidv4());
+      setRoom(uuidv4().slice(0, 8)); // Generate a random room ID if none provided
     }
-    if (socket) {
-      socket.emit("create_lobby", {
+    
+    const gameSocket = initializeSocket();
+    console.log("Creating lobby with:", { room, username, isPrivate });
+    gameSocket.emit("create_lobby", {
         roomId: room,
         host: username,
         isPrivate: isPrivate
       });
-    }
+      setIsWaiting(true);
     setGameStarted(true);
   };
 
@@ -58,12 +169,37 @@ export default function MultiplayerSetup() {
       return;
     }
     setRoom(roomId);
+    
+    const gameSocket = initializeSocket();
+    console.log("Joining lobby:", { roomId, username });
+    gameSocket.emit("join", { username: username, room: roomId });
+    setIsWaiting(true);
     setGameStarted(true);
   };
 
   const refreshLobbies = () => {
-    if (socket) {
+    if (!socket) {
+      const lobbySocket = initializeSocket();
+      lobbySocket.emit("get_lobbies");
+    } else {
       socket.emit("get_lobbies");
+    }
+  };
+
+  const handleLeaveLobby = () => {
+    if (window.confirm("Leave and close lobby?")) {
+      if (socket && room) {
+        console.log("Leaving lobby:", { room, username });
+        socket.emit("leave_lobby", { roomId: room, username });
+      }
+      setGameStarted(false);
+      setIsWaiting(false);
+      setPlayerColor(null);
+      setRoom("");
+      if (socket) {
+        socket.disconnect();
+        setSocket(null);
+      }
     }
   };
 
@@ -71,10 +207,34 @@ export default function MultiplayerSetup() {
     return (
       <PageLayout>
         <div className="w-full">
-        <Gameboard username={username} room={room} />
+          {isWaiting ? (
+            <div className="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-gray-800 p-8 rounded-lg shadow-lg text-center relative">
+                <button
+                  className="absolute top-2 right-2 text-gray-400 hover:text-white text-2xl font-bold focus:outline-none"
+                  onClick={handleLeaveLobby}
+                  aria-label="Close waiting modal"
+                >
+                  ×
+                </button>
+                <h2 className="text-2xl font-bold text-white mb-4">Waiting for Opponent</h2>
+                <p className="text-gray-300 mb-4">Share this room code with your friend:</p>
+                <div className="bg-gray-700 p-4 rounded-lg mb-4">
+                  <code className="text-xl font-mono text-white">{room}</code>
+                </div>
+                <p className="text-gray-400">Waiting for someone to join...</p>
+              </div>
+            </div>
+          ) : (
+            <Gameboard 
+              room={room} 
+              playerColor={playerColor}
+              socket={socket}
+            />
+          )}
           <div className="mt-8 flex justify-center">
-        <ReturnToMainMenu />
-      </div>
+            <ReturnToMainMenu />
+          </div>
         </div>
       </PageLayout>
     );
@@ -162,15 +322,15 @@ export default function MultiplayerSetup() {
               ) : (
                 lobbies.map((lobby) => (
                   <div 
-                    key={lobby.roomId}
+                    key={lobby.room}
                     className="flex justify-between items-center p-4 bg-gray-700 rounded-lg"
                   >
                     <div>
                       <p className="text-white font-semibold">Host: {lobby.host}</p>
-                      <p className="text-gray-400 text-sm">Room: {lobby.roomId}</p>
+                      <p className="text-gray-400 text-sm">Room: {lobby.room}</p>
                     </div>
                     <button
-                      onClick={() => handleJoinLobby(lobby.roomId)}
+                      onClick={() => handleJoinLobby(lobby.room)}
                       className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
                     >
                       Join

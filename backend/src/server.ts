@@ -4,12 +4,12 @@ import { Server } from "socket.io";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
-import environment from "./src/config/environment";
-import { setupSocketHandlers } from "./src/socket/socketHandlers";
-import { connectDB } from "./src/database/connection";
-import { errorHandler } from "./src/middleware/errorHandler";
-import { logger } from "./src/utils/logger";
-import healthRoutes from "./src/routes/health";
+import environment from "./config/environment";
+import { setupSocketHandlers } from "./socket/socketHandlers";
+import { connectDB } from "./database/connection";
+import { errorHandler } from "./middleware/errorHandler";
+import { logger } from "./utils/logger";
+import healthRoutes from "./routes/health";
 
 const app = express();
 const httpServer = createServer(app);
