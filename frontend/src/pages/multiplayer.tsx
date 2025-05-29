@@ -143,6 +143,37 @@ export default function MultiplayerSetup() {
     };
   }, [socket, username]);
 
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleLobbyList = (lobbies: Lobby[]) => {
+      setLobbies(lobbies);
+    };
+
+    const handleRoomDeleted = (data: { room: string }) => {
+      // If we're in the deleted room, redirect to home
+      if (data.room === room) {
+        setGameStarted(false);
+        setIsWaiting(false);
+        setRoom("");
+        setPlayerColor(null);
+      }
+      // Refresh lobby list
+      socket.emit("get_lobbies");
+    };
+
+    socket.on("lobby_list", handleLobbyList);
+    socket.on("room_deleted", handleRoomDeleted);
+
+    // Initial lobby fetch
+    socket.emit("get_lobbies");
+
+    return () => {
+      socket.off("lobby_list", handleLobbyList);
+      socket.off("room_deleted", handleRoomDeleted);
+    };
+  }, [socket, room]);
+
   const handleStartGame = () => {
     if (!username.trim()) {
       alert("Please enter a username.");

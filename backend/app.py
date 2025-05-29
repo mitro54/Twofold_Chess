@@ -23,6 +23,7 @@ import logging
 import random
 import datetime
 import time
+from apscheduler.schedulers.background import BackgroundScheduler
 
 
 
@@ -818,10 +819,12 @@ def on_leave_room(data):
                 if username in game_state.get("player_colors", {}):
                     del game_state["player_colors"][username]
                 
-                # If no players left, delete the game
+                # If no players left, delete the game immediately
                 if not game_state["players"]:
                     logger.info(f"Deleting empty room {room}")
                     games_collection.delete_one({"room": room})
+                    # Broadcast room deletion to all clients
+                    socketio.emit("room_deleted", {"room": room})
                 else:
                     games_collection.update_one(
                         {"room": room},
@@ -1425,12 +1428,23 @@ def on_finish_game(data):
 def cleanup_stale_rooms():
     """Clean up rooms that have been empty for too long"""
     try:
-        # Find rooms with no players or only one player that haven't been updated recently
-        stale_time = datetime.datetime.utcnow() - datetime.timedelta(hours=1)
+        # On startup, clear all active game rooms (but not completed game history)
+        if not hasattr(cleanup_stale_rooms, 'initialized'):
+            result = games_collection.delete_many({
+                "status": {"$ne": "completed"}  # Only delete non-completed games
+            })
+            if result.deleted_count > 0:
+                logger.info(f"Cleared all {result.deleted_count} active rooms on startup")
+            cleanup_stale_rooms.initialized = True
+            return
+
+        # Regular cleanup: find rooms with no players or only one player that haven't been updated recently
+        stale_time = datetime.datetime.utcnow() - datetime.timedelta(minutes=5)  # Reduced from 1 hour to 5 minutes
         result = games_collection.delete_many({
+            "status": {"$ne": "completed"},  # Only delete non-completed games
             "$or": [
-                {"players": []},
-                {"players.1": {"$exists": False}, "createdAt": {"$lt": stale_time}}
+                {"players": []},  # Empty rooms
+                {"players.1": {"$exists": False}, "createdAt": {"$lt": stale_time}}  # Single player rooms older than 5 minutes
             ]
         })
         if result.deleted_count > 0:
@@ -1442,6 +1456,10 @@ def cleanup_stale_rooms():
 if __name__ == "__main__":
     # Initial cleanup
     cleanup_stale_rooms()
+    # Set up periodic cleanup
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(cleanup_stale_rooms, 'interval', minutes=1)  # Run cleanup every minute
+    scheduler.start()
     socketio.run(app, host="0.0.0.0", port=5001)
 
 @socketio.on('connect')
