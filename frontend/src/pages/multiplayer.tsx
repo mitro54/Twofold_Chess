@@ -14,7 +14,8 @@ interface Lobby {
 }
 
 export default function MultiplayerSetup() {
-  const [username, setUsername] = useState("");
+  /* every tab gets an internal handle – never shown in the UI */
+  const [username] = useState(() => uuidv4().slice(0, 8));
   const [room, setRoom] = useState("");
   const [gameStarted, setGameStarted] = useState(false);
   const [showLobbies, setShowLobbies] = useState(false);
@@ -175,10 +176,6 @@ export default function MultiplayerSetup() {
   }, [socket, room]);
 
   const handleStartGame = () => {
-    if (!username.trim()) {
-      alert("Please enter a username.");
-      return;
-    }
     if (!room.trim()) {
       setRoom(uuidv4().slice(0, 8)); // Generate a random room ID if none provided
     }
@@ -195,10 +192,6 @@ export default function MultiplayerSetup() {
   };
 
   const handleJoinLobby = (roomId: string) => {
-    if (!username.trim()) {
-      alert("Please enter a username.");
-      return;
-    }
     setRoom(roomId);
     
     const gameSocket = initializeSocket();
@@ -277,13 +270,6 @@ export default function MultiplayerSetup() {
         <div className="flex flex-col space-y-4">
           <input
             type="text"
-            placeholder="Enter your username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-indigo-500/30 focus:border-indigo-400/50 focus:outline-none transition-all duration-300"
-          />
-          <input
-            type="text"
             placeholder="Enter room code (optional)"
             value={room}
             onChange={(e) => setRoom(e.target.value)}
@@ -357,8 +343,8 @@ export default function MultiplayerSetup() {
                     className="flex justify-between items-center p-4 bg-gray-700 rounded-lg"
                   >
                     <div>
-                      <p className="text-white font-semibold">Host: {lobby.host}</p>
-                      <p className="text-gray-400 text-sm">Room: {lobby.room}</p>
+                      <p className="text-white font-semibold">Room: {lobby.room}</p>
+                      <p className="text-gray-400 text-sm">Created: {new Date(lobby.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
                     </div>
                     <button
                       onClick={() => handleJoinLobby(lobby.room)}
