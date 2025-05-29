@@ -770,22 +770,45 @@ def on_join(data):
         emit("error", {"message": "Failed to join game"})
 
 
-# WebSocket: Handle player leaving a room
-@socketio.on("leave_lobby")
-def on_leave_lobby(data):
-    room = data.get("roomId")
-    username = data.get("username")
+# WebSocket: Handle chat messages
+@socketio.on("chat_message")
+def on_chat_message(data):
+    room = data.get("room")
+    message = data.get("message")
+    sender = data.get("sender")
 
-    logger.info(f"Leave request: room={room}, username={username}")
-
-    if not room or not username:
-        logger.error("Invalid leave data received")
-        emit("error", {"message": "Invalid leave data"})
+    if not room or not message or not sender:
+        logger.error("Invalid chat message data received")
+        emit("error", {"message": "Invalid chat message data"})
         return
 
     try:
+        # Broadcast the message to all players in the room
+        socketio.emit("chat_message", {
+            "sender": sender,
+            "message": message
+        }, room=room)
+        logger.info(f"Chat message from {sender} in room {room}: {message}")
+    except Exception as e:
+        logger.error(f"Error handling chat message: {str(e)}")
+        emit("error", {"message": "Failed to send chat message"})
+
+# WebSocket: Handle player leaving a room
+@socketio.on("leave_room")
+def on_leave_room(data):
+    room = data.get("room")
+    username = data.get("username")
+
+    logger.info(f"Leave room request: room={room}, username={username}")
+
+    if not room:
+        logger.error("Invalid leave room data received")
+        emit("error", {"message": "Invalid leave room data"})
+        return
+
+    try:
+        # Leave the socket room
         leave_room(room)
-        logger.info(f"{username} left room {room}")
         
         # Update game state
         game_state = games_collection.find_one({"room": room})
@@ -811,20 +834,23 @@ def on_leave_lobby(data):
                     )
                     logger.info(f"Updated game state after {username} left")
         
+        # Notify other players
         emit("player_left", {"username": username}, room=room)
         
-        # Always broadcast updated lobby list after any leave event
+        # Broadcast updated lobby list
         lobbies = list(games_collection.find(
             {"is_private": False, "players.1": {"$exists": False}},
             {"room": 1, "host": 1, "is_private": 1, "createdAt": 1, "_id": 0}
         ).sort("createdAt", -1))
+        
         for lobby in lobbies:
             if isinstance(lobby.get("createdAt"), datetime.datetime):
                 lobby["createdAt"] = int(lobby["createdAt"].timestamp() * 1000)
         socketio.emit("lobby_list", lobbies)
+        
     except Exception as e:
-        logger.error(f"Error leaving game: {str(e)}")
-        emit("error", {"message": "Failed to leave game"})
+        logger.error(f"Error leaving room: {str(e)}")
+        emit("error", {"message": "Failed to leave room"})
 
 # WebSocket: Handle get lobbies request
 @socketio.on("get_lobbies")
