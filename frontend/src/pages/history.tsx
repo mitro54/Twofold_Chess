@@ -187,7 +187,7 @@ const HistoryPage: React.FC = () => {
   }
 
   return (
-    <PageLayout title="Games History" titleClassName="mt-8 mb-8">
+    <PageLayout title="Games History" titleClassName="mt-8 mb-8" allowScroll={true}>
       <div className="w-full">
       <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mb-6">
         <div className="flex flex-col sm:flex-row gap-4 items-center">

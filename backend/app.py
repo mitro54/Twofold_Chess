@@ -1,7 +1,5 @@
 ######################### IMPORTS #########################
 
-
-
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, join_room, leave_room, emit
@@ -25,11 +23,7 @@ import datetime
 import time
 from apscheduler.schedulers.background import BackgroundScheduler
 
-
-
 ######################### APPLICATION INITIALIZATION #########################
-
-
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": ["http://localhost:3000", "http://frontend:3000", "http://192.168.100.135:3000"]}})
@@ -49,29 +43,118 @@ socketio = SocketIO(
     engineio_logger=True
 )
 
-
-
 ######################### MONGODB SETUP #########################
-
-
 
 mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/chess")
 client = MongoClient(mongo_uri)
 db = client.chess
 games_collection = db.games
 
+######################### SOCKET HANDLERS #########################
 
+@socketio.on('connect')
+def handle_connect():
+    logger.info(f"Client connected: {request.sid}")
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    logger.info(f"Client disconnected: {request.sid}")
+
+@socketio.on('error')
+def handle_error(error):
+    logger.error(f"Socket error: {error}")
+
+@socketio.on('*')
+def catch_all(event, data):
+    logger.info(f"Received event: {event} with data: {data}")
+
+@socketio.on("vote_reset")
+def on_vote_reset(data):
+    logger.info("Vote reset event received")
+    room = data.get("room")
+    color = data.get("color")
+
+    if not room or not color:
+        logger.error("Invalid vote reset data received")
+        emit("error", {"message": "Invalid vote reset data"})
+        return
+
+    try:
+        logger.info(f"Processing vote reset for room {room}, color {color}")
+        
+        # Get current game state
+        game_state = games_collection.find_one({"room": room})
+        if not game_state:
+            logger.error(f"Game state not found for room {room}")
+            emit("error", {"message": "Game not found"})
+            return
+
+        # Get existing votes and add new vote
+        votes = game_state.get("reset_votes", {})
+        logger.info(f"Current votes before update: {votes}")
+        
+        # Add the new vote
+        votes[color] = True
+        logger.info(f"Votes after adding {color}: {votes}")
+
+        # Update the game state with new votes
+        result = games_collection.update_one(
+            {"room": room},
+            {"$set": {"reset_votes": votes}}
+        )
+        logger.info(f"Database update result: {result.modified_count} documents modified")
+
+        # Verify the update
+        updated_state = games_collection.find_one({"room": room})
+        current_votes = updated_state.get("reset_votes", {})
+        logger.info(f"Verified votes in database: {current_votes}")
+
+        # Broadcast vote update
+        socketio.emit("reset_votes_update", {"votes": current_votes}, room=room)
+
+        # Check if both colors have voted
+        if len(current_votes) == 2:
+            logger.info(f"Both players have voted to reset in room {room}")
+            # Reset game state
+            initial_board = create_initial_board()
+            reset_state = {
+                "mainBoard": initial_board,
+                "secondaryBoard": initial_board,
+                "turn": "White",
+                "active_board_phase": "main",
+                "moves": [],
+                "winner": None,
+                "status": "ongoing",
+                "main_board_outcome": "active",
+                "secondary_board_outcome": "active",
+                "game_over": False,
+                "is_responding_to_check_on_board": None,
+                "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
+                "en_passant_target": {"main": None, "secondary": None},
+                "reset_votes": {},  # Clear votes after reset
+            }
+
+            # Update database with reset state
+            games_collection.update_one(
+                {"room": room},
+                {"$set": reset_state}
+            )
+
+            # Clear vote indicators
+            socketio.emit("reset_votes_update", {"votes": {}}, room=room)
+            # Push new game state
+            socketio.emit("game_reset", serialize_game_state(reset_state), room=room)
+            logger.info(f"Game reset completed for room {room}")
+
+    except Exception as e:
+        logger.error(f"Error handling reset vote: {str(e)}")
+        emit("error", {"message": "Failed to process reset vote"})
 
 ######################### BOARD SETUP #########################
 
-
-
 ######################### CHESS LOGIC HELPERS #########################
 
-
-
 ######################### UTILITIES #########################
-
 
 # ─── en-passant helper ────────────────────────────────────────────────
 def _init_ep_dict(game_doc):
@@ -115,11 +198,7 @@ def serialize_game_state(game_state):
         game_state["createdAt"] = int(game_state["createdAt"].timestamp() * 1000)
     return game_state
 
-
-
 ######################### ROUTES #########################
-
-
 
 # Route: Get all games data
 @app.route("/api/games", methods=["GET"])
@@ -130,7 +209,6 @@ def get_all_games():
     ).sort("_id", -1))  # Sort by _id in descending order (newest first)
     return jsonify(games), 200
 
-
 # Route: Delete all games data, NOT FOR PRODUCTION
 @app.route("/api/delete_all_games", methods=["POST"])
 def delete_all_games():
@@ -140,7 +218,6 @@ def delete_all_games():
         return jsonify({"message": f"{result.deleted_count} games deleted successfully"}), 200
     else:
         return jsonify({"message": "No games found to delete"}), 404
-
 
 # Route: Save game data
 @app.route("/api/games", methods=["POST"])
@@ -158,7 +235,6 @@ def save_game():
 
     db.games.insert_one(data)
     return jsonify({"message": "Game saved successfully!"}), 201
-
 
 # Route: Reset game state
 @app.route("/api/reset", methods=["POST"])
@@ -191,7 +267,6 @@ def reset_game():
     socketio.emit("game_reset", game_state, room=room)
     return jsonify({"message": "Game reset successfully"})
 
-
 # Route: Update game state
 @app.route("/api/update", methods=["POST"])
 def update_game():
@@ -219,7 +294,6 @@ def update_game():
     socketio.emit("game_update", game_state, room=room)
 
     return jsonify({"message": "Board updated successfully"})
-
 
 # Route: Fetch game state
 @app.route("/api/state", methods=["GET"])
@@ -283,7 +357,6 @@ def get_game_state():
     else:
         # This case should ideally not happen if insert_one or update_one in reset worked
         print(f"ERROR: Game state not found for room {room} after join/creation attempt.")
-
 
 ######################### DEBUG SCENARIO SETUP ROUTES #########################
 
@@ -676,11 +749,7 @@ def setup_debug_scenario(scenario_name):
     print(f"DEBUG: Activated scenario {scenario_name} for room {room}. Final state emitted: turn {game_doc['turn']}, phase {game_doc['active_board_phase']}, main_o {game_doc['main_board_outcome']}, sec_o {game_doc['secondary_board_outcome']}")
     return jsonify({"message": f"Scenario '{scenario_name}' activated successfully."}), 200
 
-
-
 ######################### SOCKETS #########################
-
-
 
 # WebSocket: Handle player joining a room
 @socketio.on("join")
@@ -769,7 +838,6 @@ def on_join(data):
     except Exception as e:
         logger.error(f"Error joining game: {str(e)}")
         emit("error", {"message": "Failed to join game"})
-
 
 # WebSocket: Handle chat messages
 @socketio.on("chat_message")
@@ -934,6 +1002,7 @@ def on_create_lobby(data):
             "is_responding_to_check_on_board": None,
             "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
             "en_passant_target": {"main": None, "secondary": None},
+            "reset_votes": {},  # Track reset votes
         }
 
         # Insert the new game state
@@ -988,14 +1057,12 @@ def on_reset(data):
     # Ensure secondaryBoard is a distinct copy
     game_state["secondaryBoard"] = copy.deepcopy(game_state["mainBoard"])
 
-
     games_collection.update_one(
         {"room": room}, {"$set": game_state}, upsert=True
     )
     # Emit the game_state that was set, ensuring it includes _id if client expects it (serialize if needed)
     # For game_reset, usually we send the clean state.
     socketio.emit("game_reset", serialize_game_state(game_state.copy()), room=room) # Send a copy
-
 
 # WebSocket: Handle move events
 @socketio.on("move")
@@ -1379,8 +1446,6 @@ def on_move(data):
     games_collection.update_one({"room": room}, {"$set": game_doc})
     socketio.emit("game_update", serialize_game_state(game_doc), room=room)
 
-
-
 # WebSocket: Handle finishing game
 @socketio.on("finish_game")
 def on_finish_game(data):
@@ -1419,11 +1484,7 @@ def on_finish_game(data):
     socketio.emit("game_reset", reset_game_state, room=room)
     print(f"Game finished for room {room} and state reset for a new game.")
 
-
-
 ######################### MAIN EXECUTION #########################
-
-
 
 def cleanup_stale_rooms():
     """Clean up rooms that have been empty for too long"""
@@ -1461,15 +1522,3 @@ if __name__ == "__main__":
     scheduler.add_job(cleanup_stale_rooms, 'interval', minutes=1)  # Run cleanup every minute
     scheduler.start()
     socketio.run(app, host="0.0.0.0", port=5001)
-
-@socketio.on('connect')
-def handle_connect():
-    logger.info(f"Client connected: {request.sid}")
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    logger.info(f"Client disconnected: {request.sid}")
-
-@socketio.on('error')
-def handle_error(error):
-    logger.error(f"Socket error: {error}")

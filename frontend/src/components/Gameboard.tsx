@@ -27,6 +27,7 @@ interface GameStateData {
   is_responding_to_check_on_board?: "main" | "secondary" | null;
   en_passant_target?: [number, number] | null;
   castling_rights?: { White:{K:boolean;Q:boolean}; Black:{K:boolean;Q:boolean} };
+  reset_votes?: Record<string, boolean>;
 }
 
 interface MoveErrorData {
@@ -149,6 +150,8 @@ const Gameboard: React.FC<GameboardProps> = ({
   const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
+  const [resetVotes, setResetVotes] = useState<Record<string, boolean>>({});
+
   // Helper to determine castling rights and eligible rooks for the selected king
   const getCastlingOptions = (
     board: ChessBoardType,
@@ -257,6 +260,9 @@ const Gameboard: React.FC<GameboardProps> = ({
         data.castling_rights ?? { White: { K: true, Q: true },
         Black: { K: true, Q: true } }
         );
+
+        // 🔄 wipe vote indicators after a successful reset
+        setResetVotes({});
       });
     }
     return () => {
@@ -326,6 +332,11 @@ const Gameboard: React.FC<GameboardProps> = ({
         setRespondingToCheckBoard(data.is_responding_to_check_on_board || null);
         setEnPassantTarget(data.en_passant_target ?? { main: null, secondary: null });
         setCastlingRights(data.castling_rights ?? { White: { K: true, Q: true }, Black: { K: true, Q: true } });
+      
+        // keep local vote indicators in sync with server
+        if (data.reset_votes) {
+          setResetVotes(data.reset_votes);
+        }
       
         // Clear selection after move
         setSelectedPieceSquare(null);
@@ -916,6 +927,39 @@ const handleSquareClick = (
     }
   };
 
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleResetVotesUpdate = (data: { votes: Record<string, boolean> }) => {
+      setResetVotes(data.votes);
+    };
+
+    socket.on("reset_votes_update", handleResetVotesUpdate);
+
+    return () => {
+      socket.off("reset_votes_update", handleResetVotesUpdate);
+    };
+  }, [socket]);
+
+  const handleVoteReset = () => {
+    if (!roomFromProps) return;
+    
+    if (socket) {
+      if (playerColor) {
+        // For multiplayer games, use vote-based reset
+        socket.emit("vote_reset", { room: roomFromProps, color: myColor });
+        // Optimistic local update
+        setResetVotes(prev => ({ ...prev, [myColor]: true }));
+      } else {
+        // For local games, use direct reset
+        resetBoard();
+      }
+    } else {
+      // Fallback for when socket is not available
+      resetBoard();
+    }
+  };
+
   return (
     <div className="flex flex-col items-center select-none">
       <div className="flex justify-between items-center w-full max-w-[600px] px-4 mb-2">
@@ -1043,14 +1087,26 @@ const handleSquareClick = (
 
       <p className="text-lg text-gray-600 mt-2 hidden md:block">Press Spacebar to swap boards</p>
       <div className="flex flex-row gap-2 mt-2">
-        <button
-          onClick={resetBoard}
-          className="px-4 py-2 sm:px-6 sm:py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-blue-500/30 hover:border-blue-400/50 transition-all duration-300 transform hover:scale-105 text-sm sm:text-base font-semibold shadow-[0_0_15px_rgba(59,130,246,0.3)] hover:shadow-[0_0_20px_rgba(59,130,246,0.5)] flex items-center justify-center min-w-[140px] sm:min-w-[180px] group"
-        >
-          <span className="bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent group-hover:from-blue-300 group-hover:to-cyan-300 transition-colors">
-            Reset Both Boards
-          </span>
-        </button>
+        <div className="flex items-center space-x-2">
+          {socket && ( // Only show vote indicators for multiplayer games
+            <div className="flex flex-col space-y-1">
+              {(["White","Black"] as const).map(col => (
+                <div
+                  key={col}
+                  className={`w-3 h-3 rounded-full ${resetVotes[col] ? "bg-blue-500" : "bg-gray-600"}`}
+                />
+              ))}
+            </div>
+          )}
+          <button
+            onClick={handleVoteReset}
+            className="px-4 py-2 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-blue-500/30 hover:border-blue-400/50 transition-all duration-300 transform hover:scale-105 text-sm sm:text-base font-semibold shadow-[0_0_15px_rgba(59,130,246,0.3)] hover:shadow-[0_0_20px_rgba(59,130,246,0.5)] flex items-center justify-center min-w-[140px] sm:min-w-[180px] group"
+          >
+            <span className="bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent group-hover:from-blue-300 group-hover:to-cyan-300 transition-colors">
+              Reset Both Boards
+            </span>
+          </button>
+        </div>
         <button
           onClick={() => setShowDebugMenu(!showDebugMenu)}
           className="px-4 py-2 sm:px-6 sm:py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-purple-500/30 hover:border-purple-400/50 transition-all duration-300 transform hover:scale-105 text-sm sm:text-base font-semibold shadow-[0_0_15px_rgba(168,85,247,0.3)] hover:shadow-[0_0_20px_rgba(168,85,247,0.5)] flex items-center justify-center min-w-[140px] sm:min-w-[180px] group"
