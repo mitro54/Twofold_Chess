@@ -765,11 +765,14 @@ def on_join(data):
         return
 
     try:
-        # Check if room exists
-        game_state = games_collection.find_one({"room": room})
+        # Check if room exists and is active
+        game_state = games_collection.find_one({
+            "room": room,
+            "status": "ongoing"  # Only check for ongoing games
+        })
         if not game_state:
-            logger.error(f"Game state not found for room {room}")
-            emit("error", {"message": "Game not found"})
+            logger.error(f"Game state not found for room {room} or game is not active")
+            emit("error", {"message": "Game not found or not active"})
             return
 
         # Check if room is full
@@ -803,8 +806,7 @@ def on_join(data):
                 }
             )
             
-            # Notify both players — now include the target username so
-            # each client can ignore the message meant for the other one.
+            # Notify both players
             emit(
                 "player_joined",
                 {"color": second_player_color, "username": username},
@@ -828,7 +830,7 @@ def on_join(data):
             
             # Broadcast updated lobby list to all clients
             lobbies = list(games_collection.find(
-                {"is_private": False, "players.1": {"$exists": False}},
+                {"is_private": False, "players.1": {"$exists": False}, "status": "ongoing"},
                 {"room": 1, "host": 1, "is_private": 1, "createdAt": 1, "_id": 0}
             ).sort("createdAt", -1))
             for lobby in lobbies:
@@ -932,6 +934,7 @@ def on_get_lobbies():
         lobbies = list(games_collection.find(
             {
                 "is_private": False,
+                "status": "ongoing",
                 "players.1": {"$exists": False},  # Not full
                 "players.0": {"$exists": True}    # Has at least one player
             },
@@ -969,10 +972,13 @@ def on_create_lobby(data):
             emit("error", {"message": "Invalid lobby data"})
             return
 
-        # Check if room already exists
-        existing_room = games_collection.find_one({"room": room_id})
+        # Check if room exists and is active
+        existing_room = games_collection.find_one({
+            "room": room_id,
+            "status": "ongoing"  # Only check for ongoing games
+        })
         if existing_room:
-            logger.error(f"Room {room_id} already exists")
+            logger.error(f"Room {room_id} already exists and is active")
             emit("error", {"message": "Room already exists"})
             return
 
@@ -1014,7 +1020,7 @@ def on_create_lobby(data):
 
         # Get updated lobby list and convert datetime to timestamp
         lobbies = list(games_collection.find(
-            {"is_private": False, "players.1": {"$exists": False}},
+            {"is_private": False, "players.1": {"$exists": False}, "status": "ongoing"},
             {"room": 1, "host": 1, "is_private": 1, "createdAt": 1, "_id": 0}
         ))
         for lobby in lobbies:

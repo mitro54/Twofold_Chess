@@ -176,19 +176,36 @@ export default function MultiplayerSetup() {
   }, [socket, room]);
 
   const handleStartGame = () => {
-    if (!room.trim()) {
-      setRoom(uuidv4().slice(0, 8)); // Generate a random room ID if none provided
-    }
-    
+    // Initialize socket first
     const gameSocket = initializeSocket();
-    console.log("Creating lobby with:", { room, username, isPrivate });
-    gameSocket.emit("create_lobby", {
+    
+    // Generate room ID if none provided
+    if (!room.trim()) {
+      const randomRoom = uuidv4().slice(0, 8);
+      setRoom(randomRoom);
+      
+      // Wait for socket to be ready before creating lobby
+      gameSocket.on("connect", () => {
+        console.log("Creating lobby with:", { room: randomRoom, username, isPrivate });
+        gameSocket.emit("create_lobby", {
+          roomId: randomRoom,
+          host: username,
+          isPrivate: isPrivate
+        });
+        setIsWaiting(true);
+        setGameStarted(true);
+      });
+    } else {
+      // If room ID is provided, create lobby immediately
+      console.log("Creating lobby with:", { room, username, isPrivate });
+      gameSocket.emit("create_lobby", {
         roomId: room,
         host: username,
         isPrivate: isPrivate
       });
       setIsWaiting(true);
-    setGameStarted(true);
+      setGameStarted(true);
+    }
   };
 
   const handleJoinLobby = (roomId: string) => {
