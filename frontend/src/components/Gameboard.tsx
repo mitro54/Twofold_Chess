@@ -328,8 +328,12 @@ const Gameboard: React.FC<GameboardProps> = ({
         const currentPhase = data.active_board_phase || "main";
         setServerActiveBoardPhase(currentPhase);
         
-        // Only update active board if it's different from current phase and not a manual switch
-        if (activeBoard !== currentPhase && !isManualBoardSwitch) {
+        // Only update active board if it's different from current phase, not a manual switch,
+        // and both boards are active
+        if (activeBoard !== currentPhase && 
+            !isManualBoardSwitch && 
+            mainBoardOutcome === "active" && 
+            secondaryBoardOutcome === "active") {
           // Clear any existing timeouts
           if (boardSwapTimeoutRef.current) {
             clearTimeout(boardSwapTimeoutRef.current);
@@ -380,7 +384,7 @@ const Gameboard: React.FC<GameboardProps> = ({
         clearTimeout(manualSwitchTimeoutRef.current);
       }
     };
-  }, [socket, roomFromProps, isManualBoardSwitch, isPlayerBlack, hasInitializedBoard]);
+  }, [socket, roomFromProps, isManualBoardSwitch, isPlayerBlack, hasInitializedBoard, mainBoardOutcome, secondaryBoardOutcome]);
 
   /** show server-side move errors */
   useEffect(() => {
@@ -440,8 +444,10 @@ const Gameboard: React.FC<GameboardProps> = ({
   useEffect(() => {
     if (socket) {
       const handleMoveComplete = () => {
-        // Only swap boards if we're not responding to check
-        if (!respondingToCheckBoard) {
+        // Only swap boards if we're not responding to check and both boards are active
+        if (!respondingToCheckBoard && 
+            mainBoardOutcome === "active" && 
+            secondaryBoardOutcome === "active") {
           // Clear any existing timeout
           if (boardSwapTimeoutRef.current) {
             clearTimeout(boardSwapTimeoutRef.current);
@@ -467,7 +473,7 @@ const Gameboard: React.FC<GameboardProps> = ({
         }
       };
     }
-  }, [socket, respondingToCheckBoard]);
+  }, [socket, respondingToCheckBoard, mainBoardOutcome, secondaryBoardOutcome]);
 
   const resetBoard = async () => {
     console.log("FRONTEND: Resetting board for room:", roomFromProps);
