@@ -283,8 +283,14 @@ const Gameboard: React.FC<GameboardProps> = ({
       setMainBoard(createInitialBoard(!isBlack));
       setSecondaryBoard(createInitialBoard(!isBlack));
       setHasInitializedBoard(true);
+
+      // Reset the game once when a player first joins to ensure correct state
+      if (socket && roomFromProps) {
+        console.log("Resetting game on first join to ensure correct state");
+        socket.emit("reset", { room: roomFromProps });
+      }
     }
-  }, [playerColor]);
+  }, [playerColor, socket, roomFromProps]);
 
   // Add effect to handle game state updates
   useEffect(() => {
@@ -363,9 +369,6 @@ const Gameboard: React.FC<GameboardProps> = ({
     socket.on("game_update", handleGameState);
     socket.on("move_made", handleGameState);
 
-    // Only request initial game state on mount
-    socket.emit("get_game_state", { room: roomFromProps });
-
     return () => {
       socket.off("game_state", handleGameState);
       socket.off("game_update", handleGameState);
@@ -377,7 +380,7 @@ const Gameboard: React.FC<GameboardProps> = ({
         clearTimeout(manualSwitchTimeoutRef.current);
       }
     };
-  }, [socket, roomFromProps, activeBoard, isManualBoardSwitch, isPlayerBlack, hasInitializedBoard]);
+  }, [socket, roomFromProps, isManualBoardSwitch, isPlayerBlack, hasInitializedBoard]);
 
   /** show server-side move errors */
   useEffect(() => {
