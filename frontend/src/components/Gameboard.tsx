@@ -151,6 +151,8 @@ const Gameboard: React.FC<GameboardProps> = ({
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const [resetVotes, setResetVotes] = useState<Record<string, boolean>>({});
+  const [showRules, setShowRules] = useState(false);
+  const [hasInitializedBoard, setHasInitializedBoard] = useState(false);
 
   // Helper to determine castling rights and eligible rooks for the selected king
   const getCastlingOptions = (
@@ -280,6 +282,7 @@ const Gameboard: React.FC<GameboardProps> = ({
       // Create initial boards with correct orientation
       setMainBoard(createInitialBoard(!isBlack));
       setSecondaryBoard(createInitialBoard(!isBlack));
+      setHasInitializedBoard(true);
     }
   }, [playerColor]);
 
@@ -300,11 +303,21 @@ const Gameboard: React.FC<GameboardProps> = ({
           turn: data.turn,
           phase: data.active_board_phase,
           isManualSwitch: isManualBoardSwitch,
-          isPlayerBlack
+          isPlayerBlack,
+          hasInitializedBoard
         });
 
-        setMainBoard(newMainBoard);
-        setSecondaryBoard(newSecondaryBoard);
+        // If this is the first game state update after joining, ensure correct orientation
+        if (!hasInitializedBoard && playerColor) {
+          const isBlack = playerColor === "Black";
+          setMainBoard(createInitialBoard(!isBlack));
+          setSecondaryBoard(createInitialBoard(!isBlack));
+          setHasInitializedBoard(true);
+        } else {
+          setMainBoard(newMainBoard);
+          setSecondaryBoard(newSecondaryBoard);
+        }
+
         setTurn(data.turn);
         const currentPhase = data.active_board_phase || "main";
         setServerActiveBoardPhase(currentPhase);
@@ -364,7 +377,7 @@ const Gameboard: React.FC<GameboardProps> = ({
         clearTimeout(manualSwitchTimeoutRef.current);
       }
     };
-  }, [socket, roomFromProps, activeBoard, isManualBoardSwitch, isPlayerBlack]);
+  }, [socket, roomFromProps, activeBoard, isManualBoardSwitch, isPlayerBlack, hasInitializedBoard]);
 
   /** show server-side move errors */
   useEffect(() => {
@@ -962,25 +975,35 @@ const handleSquareClick = (
 
   return (
     <div className="flex flex-col items-center select-none">
-      <div className="flex justify-between items-center w-full max-w-[600px] px-4 mb-2">
-        <h2 className="text-2xl font-bold text-gray-600 break-all text-center">
-          Room: {roomFromProps}
+      <div className="flex flex-col items-center w-full max-w-[600px] px-4 mb-2">
+        <h2 className="text-lg sm:text-xl font-medium text-white/90 mb-2">
+          Room: <span className="text-white font-semibold">{roomFromProps}</span>
         </h2>
-        {playerColor && (
-          <div className="relative">
-            <button
-              onClick={() => setShowChat(true)}
-              className="px-4 py-2 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-indigo-500/30 hover:border-indigo-400/50 transition-all duration-300 transform hover:scale-105 text-sm sm:text-base font-semibold shadow-[0_0_15px_rgba(99,102,241,0.3)] hover:shadow-[0_0_20px_rgba(99,102,241,0.5)] flex items-center justify-center min-w-[100px] group"
-            >
-              <span className="bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent group-hover:from-indigo-300 group-hover:to-purple-300 transition-colors">
-                Chat
-              </span>
-            </button>
-            {hasUnreadMessages && (
-              <div className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-            )}
-          </div>
-        )}
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowRules(true)}
+            className="px-4 py-2 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-green-500/30 hover:border-green-400/50 transition-all duration-300 transform hover:scale-105 text-sm sm:text-base font-semibold shadow-[0_0_15px_rgba(34,197,94,0.3)] hover:shadow-[0_0_20px_rgba(34,197,94,0.5)] flex items-center justify-center min-w-[100px] group"
+          >
+            <span className="bg-gradient-to-r from-green-400 to-emerald-400 bg-clip-text text-transparent group-hover:from-green-300 group-hover:to-emerald-300 transition-colors">
+              Rules
+            </span>
+          </button>
+          {playerColor && (
+            <div className="relative">
+              <button
+                onClick={() => setShowChat(true)}
+                className="px-4 py-2 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-indigo-500/30 hover:border-indigo-400/50 transition-all duration-300 transform hover:scale-105 text-sm sm:text-base font-semibold shadow-[0_0_15px_rgba(99,102,241,0.3)] hover:shadow-[0_0_20px_rgba(99,102,241,0.5)] flex items-center justify-center min-w-[100px] group"
+              >
+                <span className="bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent group-hover:from-indigo-300 group-hover:to-purple-300 transition-colors">
+                  Chat
+                </span>
+              </button>
+              {hasUnreadMessages && (
+                <div className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+              )}
+            </div>
+          )}
+        </div>
       </div>
       <div className="relative h-6 mb-1 flex items-center justify-center px-4">
         {respondingToCheckBoard && (
@@ -1088,7 +1111,7 @@ const handleSquareClick = (
       <p className="text-lg text-gray-600 mt-2 hidden md:block">Press Spacebar to swap boards</p>
       <div className="flex flex-row gap-2 mt-2">
         <div className="flex items-center space-x-2">
-          {socket && ( // Only show vote indicators for multiplayer games
+          {socket && playerColor && ( // Only show vote indicators for multiplayer games
             <div className="flex flex-col space-y-1">
               {(["White","Black"] as const).map(col => (
                 <div
@@ -1277,6 +1300,60 @@ const handleSquareClick = (
               >
                 Send
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rules Modal */}
+      {showRules && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+          onClick={() => setShowRules(false)}
+        >
+          <div 
+            className="bg-gray-900 rounded-lg p-6 w-[90%] max-w-2xl max-h-[90vh] border border-green-500/30 shadow-[0_0_20px_rgba(34,197,94,0.3)] overflow-y-auto"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-2xl font-bold text-green-400">Game Rules</h3>
+              <button
+                onClick={() => setShowRules(false)}
+                className="text-gray-400 hover:text-gray-200 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-6 text-gray-200 text-left">
+              <div>
+                <h4 className="text-xl font-semibold text-green-400 mb-2">General Board Rules</h4>
+                <ul className="list-disc pl-6 space-y-2">
+                  <li>Normal Chess moves.</li>
+                  <li>If either board ends up in Checkmate, game ends.</li>
+                  <li>If either board is in Stalemate, rest of the game is played normally on the other board.</li>
+                  <li>If player gets in a Check, player is only allowed to move the boards pieces they are checked in to get out of Check.</li>
+                  <li>If player causes a Check, player is not allowed to make more moves. Turn changes immediately to the defender.</li>
+                  <li>En passant move in either board captures the pawn from both boards.</li>
+                  <li>Castling is only allowed in one board per game.</li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="text-xl font-semibold text-green-400 mb-2">Specified Board Rules</h4>
+                <div className="space-y-4">
+                  <div>
+                    <h5 className="text-lg font-semibold text-green-300">Main Board</h5>
+                    <ul className="list-disc pl-6 space-y-1">
+                      <li>Capturing a piece affects the same piece in Secondary board.</li>
+                    </ul>
+                  </div>
+                  <div>
+                    <h5 className="text-lg font-semibold text-green-300">Secondary Board</h5>
+                    <ul className="list-disc pl-6 space-y-1">
+                      <li>Capturing a piece does not affect the same piece in Main board, only exception is En passant.</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
