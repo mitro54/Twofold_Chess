@@ -27,6 +27,7 @@ interface GameStateData {
   is_responding_to_check_on_board?: "main" | "secondary" | null;
   en_passant_target?: [number, number] | null;
   castling_rights?: { White:{K:boolean;Q:boolean}; Black:{K:boolean;Q:boolean} };
+  reset_votes?: Record<string, boolean>;
 }
 
 interface MoveErrorData {
@@ -84,8 +85,8 @@ const Gameboard: React.FC<GameboardProps> = ({
   // Use myColor for orientation and UI, set from socket events
   const [myColor, setMyColor] = useState<"White" | "Black" | null>(playerColor ?? null);
   const isPlayerBlack = myColor === "Black";
-  const [mainBoard, setMainBoard] = useState<ChessBoardType>(createInitialBoard(!isPlayerBlack));
-  const [secondaryBoard, setSecondaryBoard] = useState<ChessBoardType>(createInitialBoard(!isPlayerBlack));
+  const [mainBoard, setMainBoard] = useState<ChessBoardType>(() => createInitialBoard(!isPlayerBlack));
+  const [secondaryBoard, setSecondaryBoard] = useState<ChessBoardType>(() => createInitialBoard(!isPlayerBlack));
   const [activeBoard, setActiveBoard] = useState<"main" | "secondary">("main");
   const [serverActiveBoardPhase, setServerActiveBoardPhase] = useState<"main" | "secondary">("main");
   const [selectedPieceSquare, setSelectedPieceSquare] = useState<Position | null>(null);
@@ -96,7 +97,6 @@ const Gameboard: React.FC<GameboardProps> = ({
   const [gameFinished, setGameFinished] = useState(false);
   const [showCheckmateModal, setShowCheckmateModal] = useState(false);
   const [gameEndMessage, setGameEndMessage] = useState("");
-  const [winner, setWinner] = useState<"White" | "Black" | "Draw" | null>(null);
   const visualUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const boardSwapTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -144,10 +144,17 @@ const Gameboard: React.FC<GameboardProps> = ({
 
   const [isManualBoardSwitch, setIsManualBoardSwitch] = useState(false);
   const manualSwitchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [boardOpacity, setBoardOpacity] = useState({
-    main: 1,
-    secondary: 1
-  });
+  const [showChat, setShowChat] = useState(false);
+  const [chatMessages, setChatMessages] = useState<Array<{sender: string, message: string}>>([]);
+  const [newMessage, setNewMessage] = useState("");
+  const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  const [resetVotes, setResetVotes] = useState<Record<string, boolean>>({});
+  const [showRules, setShowRules] = useState(false);
+  const [hasInitializedBoard, setHasInitializedBoard] = useState(false);
+
+  const [showDisconnectedModal, setShowDisconnectedModal] = useState(false);
 
   // Helper to determine castling rights and eligible rooks for the selected king
   const getCastlingOptions = (
@@ -248,7 +255,6 @@ const Gameboard: React.FC<GameboardProps> = ({
         setGameFinished(data.game_over || false);
         setSelectedPieceSquare(null);
         setPossibleMoves([]);
-        setWinner(data.winner || null);
         setMainBoardOutcome(data.main_board_outcome || "active");
         setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
         setShowCheckmateModal(false);
@@ -258,6 +264,9 @@ const Gameboard: React.FC<GameboardProps> = ({
         data.castling_rights ?? { White: { K: true, Q: true },
         Black: { K: true, Q: true } }
         );
+
+        // 🔄 wipe vote indicators after a successful reset
+        setResetVotes({});
       });
     }
     return () => {
@@ -272,10 +281,18 @@ const Gameboard: React.FC<GameboardProps> = ({
     if (playerColor) {
       setMyColor(playerColor);
       const isBlack = playerColor === "Black";
+      // Create initial boards with correct orientation
       setMainBoard(createInitialBoard(!isBlack));
       setSecondaryBoard(createInitialBoard(!isBlack));
+      setHasInitializedBoard(true);
+
+      // Reset the game once when a player first joins to ensure correct state
+      if (socket && roomFromProps) {
+        console.log("Resetting game on first join to ensure correct state");
+        socket.emit("reset", { room: roomFromProps });
+      }
     }
-  }, [playerColor]);
+  }, [playerColor, socket, roomFromProps]);
 
   // Add effect to handle game state updates
   useEffect(() => {
@@ -283,7 +300,7 @@ const Gameboard: React.FC<GameboardProps> = ({
 
     const handleGameState = (data: GameStateData) => {
       console.log("Game state update received:", JSON.stringify(data, null, 2));
-      if (data) {
+      if (data && data.mainBoard && data.secondaryBoard) {
         // Force React to recognize the state change by creating new arrays
         const newMainBoard = data.mainBoard.map(row => [...row]);
         const newSecondaryBoard = data.secondaryBoard.map(row => [...row]);
@@ -293,34 +310,36 @@ const Gameboard: React.FC<GameboardProps> = ({
           secondaryBoard: newSecondaryBoard,
           turn: data.turn,
           phase: data.active_board_phase,
-          isManualSwitch: isManualBoardSwitch
+          isManualSwitch: isManualBoardSwitch,
+          isPlayerBlack,
+          hasInitializedBoard
         });
 
-        setMainBoard(newMainBoard);
-        setSecondaryBoard(newSecondaryBoard);
-        setTurn(data.turn);
-      const currentPhase = data.active_board_phase || "main";
-      setServerActiveBoardPhase(currentPhase);
-        
-        // Update board opacity with delay
-        if (currentPhase === "main") {
-          setBoardOpacity({
-            main: 1,
-            secondary: 0.1
-          });
+        // If this is the first game state update after joining, ensure correct orientation
+        if (!hasInitializedBoard && playerColor) {
+          const isBlack = playerColor === "Black";
+          setMainBoard(createInitialBoard(!isBlack));
+          setSecondaryBoard(createInitialBoard(!isBlack));
+          setHasInitializedBoard(true);
         } else {
-          setBoardOpacity({
-            main: 0.1,
-            secondary: 1
-          });
+          setMainBoard(newMainBoard);
+          setSecondaryBoard(newSecondaryBoard);
         }
+
+        setTurn(data.turn);
+        const currentPhase = data.active_board_phase || "main";
+        setServerActiveBoardPhase(currentPhase);
         
-        // Only update active board if it's different from current phase and not a manual switch
-        if (activeBoard !== currentPhase && !isManualBoardSwitch) {
+        // Only update active board if it's different from current phase, not a manual switch,
+        // and both boards are active
+        if (activeBoard !== currentPhase && 
+            !isManualBoardSwitch && 
+            mainBoardOutcome === "active" && 
+            secondaryBoardOutcome === "active") {
           // Clear any existing timeouts
           if (boardSwapTimeoutRef.current) {
             clearTimeout(boardSwapTimeoutRef.current);
-      }
+          }
           
           // Set new timeout to swap boards after 0.8 seconds
           boardSwapTimeoutRef.current = setTimeout(() => {
@@ -331,18 +350,22 @@ const Gameboard: React.FC<GameboardProps> = ({
           }, 800);
         }
         
-      setMoveHistory(data.moves || []);
-      setGameFinished(data.game_over || false);
-        setWinner(data.winner || null);
-      setMainBoardOutcome(data.main_board_outcome || "active");
-      setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
-      setRespondingToCheckBoard(data.is_responding_to_check_on_board || null);
-      setEnPassantTarget(data.en_passant_target ?? { main: null, secondary: null });
+        setMoveHistory(data.moves || []);
+        setGameFinished(data.game_over || false);
+        setMainBoardOutcome(data.main_board_outcome || "active");
+        setSecondaryBoardOutcome(data.secondary_board_outcome || "active");
+        setRespondingToCheckBoard(data.is_responding_to_check_on_board || null);
+        setEnPassantTarget(data.en_passant_target ?? { main: null, secondary: null });
         setCastlingRights(data.castling_rights ?? { White: { K: true, Q: true }, Black: { K: true, Q: true } });
       
+        // keep local vote indicators in sync with server
+        if (data.reset_votes) {
+          setResetVotes(data.reset_votes);
+        }
+      
         // Clear selection after move
-      setSelectedPieceSquare(null);
-      setPossibleMoves([]);
+        setSelectedPieceSquare(null);
+        setPossibleMoves([]);
         setCastlingCandidate(null);
       }
     };
@@ -351,9 +374,6 @@ const Gameboard: React.FC<GameboardProps> = ({
     socket.on("game_state", handleGameState);
     socket.on("game_update", handleGameState);
     socket.on("move_made", handleGameState);
-
-    // Only request initial game state on mount
-    socket.emit("get_game_state", { room: roomFromProps });
 
     return () => {
       socket.off("game_state", handleGameState);
@@ -364,9 +384,9 @@ const Gameboard: React.FC<GameboardProps> = ({
       }
       if (manualSwitchTimeoutRef.current) {
         clearTimeout(manualSwitchTimeoutRef.current);
-           }
+      }
     };
-  }, [socket, roomFromProps, activeBoard, isManualBoardSwitch]);
+  }, [socket, roomFromProps, isManualBoardSwitch, isPlayerBlack, hasInitializedBoard, mainBoardOutcome, secondaryBoardOutcome]);
 
   /** show server-side move errors */
   useEffect(() => {
@@ -382,6 +402,11 @@ const Gameboard: React.FC<GameboardProps> = ({
   // Add spacebar event listener
   useEffect(() => {
     const handleKeyPress = (event: KeyboardEvent) => {
+      // Ignore spacebar if we're typing in chat
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
       if (event.code === 'Space' && !showPromotionModal) {
         event.preventDefault();
         if (visualUpdateTimeoutRef.current) {
@@ -421,31 +446,36 @@ const Gameboard: React.FC<GameboardProps> = ({
   useEffect(() => {
     if (socket) {
       const handleMoveComplete = () => {
-        // Clear any existing timeout
-        if (boardSwapTimeoutRef.current) {
-          clearTimeout(boardSwapTimeoutRef.current);
+        // Only swap boards if we're not responding to check and both boards are active
+        if (!respondingToCheckBoard && 
+            mainBoardOutcome === "active" && 
+            secondaryBoardOutcome === "active") {
+          // Clear any existing timeout
+          if (boardSwapTimeoutRef.current) {
+            clearTimeout(boardSwapTimeoutRef.current);
+          }
+          
+          // Set new timeout to swap boards after 0.5 seconds
+          boardSwapTimeoutRef.current = setTimeout(() => {
+            setActiveBoard(prev => prev === "main" ? "secondary" : "main");
+            setSelectedPieceSquare(null);
+            setPossibleMoves([]);
+          }, 500);
         }
-        
-        // Set new timeout to swap boards after 0.5 seconds
-        boardSwapTimeoutRef.current = setTimeout(() => {
-          setActiveBoard(prev => prev === "main" ? "secondary" : "main");
-          setSelectedPieceSquare(null);
-          setPossibleMoves([]);
-        }, 500);
       };
 
       socket.on("move_made", handleMoveComplete);
       socket.on("game_update", handleMoveComplete);
 
-    return () => {
+      return () => {
         socket.off("move_made", handleMoveComplete);
         socket.off("game_update", handleMoveComplete);
         if (boardSwapTimeoutRef.current) {
           clearTimeout(boardSwapTimeoutRef.current);
-      }
-    };
+        }
+      };
     }
-  }, [socket]);
+  }, [socket, respondingToCheckBoard, mainBoardOutcome, secondaryBoardOutcome]);
 
   const resetBoard = async () => {
     console.log("FRONTEND: Resetting board for room:", roomFromProps);
@@ -801,7 +831,7 @@ const handleSquareClick = (
             className={`aspect-square w-full h-full flex items-center justify-center relative transition-all duration-150 ease-in-out 
               ${isBlackSquare ? colors.dark : colors.light} 
               ${isCurrentSelectedPieceSquare ? "ring-2 ring-red-500 ring-inset" : ""}
-              ${(isDisabled) ? "opacity-50 cursor-not-allowed" : "cursor-pointer"} 
+              ${(isDisabled) ? "opacity-90 cursor-not-allowed" : "cursor-pointer"} 
               ${isBoardResolved ? "filter grayscale(70%) opacity-60" : ""}
               `}
             title={titleText}
@@ -879,12 +909,125 @@ const handleSquareClick = (
     setLastTapPosition({ x: touch.clientX, y: touch.clientY });
   };
 
+  // Scroll chat to bottom when new messages arrive
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages]);
+
+  // Add chat message handler with unread message tracking
+  useEffect(() => {
+    if (socket) {
+      socket.on("chat_message", (data: {sender: string, message: string}) => {
+        setChatMessages(prev => [...prev, data]);
+        if (!showChat) {
+          setHasUnreadMessages(true);
+        }
+      });
+    }
+    return () => {
+      if (socket) {
+        socket.off("chat_message");
+      }
+    };
+  }, [socket, showChat]);
+
+  // Reset unread messages when chat is opened
+  useEffect(() => {
+    if (showChat) {
+      setHasUnreadMessages(false);
+    }
+  }, [showChat]);
+
+  const handleSendMessage = () => {
+    if (newMessage.trim() && socket) {
+      socket.emit("chat_message", {
+        room: roomFromProps,
+        message: newMessage,
+        sender: myColor || "Anonymous"
+      });
+      setNewMessage("");
+    }
+  };
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleResetVotesUpdate = (data: { votes: Record<string, boolean> }) => {
+      setResetVotes(data.votes);
+    };
+
+    socket.on("reset_votes_update", handleResetVotesUpdate);
+
+    return () => {
+      socket.off("reset_votes_update", handleResetVotesUpdate);
+    };
+  }, [socket]);
+
+  const handleVoteReset = () => {
+    if (!roomFromProps) return;
+    
+    if (socket) {
+      if (playerColor) {
+        // For multiplayer games, use vote-based reset
+        socket.emit("vote_reset", { room: roomFromProps, color: myColor });
+        // Optimistic local update
+        setResetVotes(prev => ({ ...prev, [myColor]: true }));
+      } else {
+        // For local games, use direct reset
+        resetBoard();
+      }
+    } else {
+      // Fallback for when socket is not available
+      resetBoard();
+    }
+  };
+
+  useEffect(() => {
+    if (!socket) return;
+
+    socket.on("player_disconnected", () => {
+      setShowDisconnectedModal(true);
+    });
+
+    return () => {
+      socket.off("player_disconnected");
+    };
+  }, [socket]);
+
   return (
     <div className="flex flex-col items-center select-none">
-      <h2 className="text-2xl font-bold mb-1 mt-4 md:mb-1 md:mt-6 text-gray-600 break-all text-center px-4">
-        Room: {roomFromProps}
-        {myColor && ` - You are playing as ${myColor}`}
-      </h2>
+      <div className="flex flex-col items-center w-full max-w-[600px] px-4 mb-2">
+        <h2 className="text-lg sm:text-xl font-medium text-white/90 mb-2">
+          Room: <span className="text-white font-semibold">{roomFromProps}</span>
+        </h2>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowRules(true)}
+            className="px-4 py-2 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-green-500/30 hover:border-green-400/50 transition-all duration-300 transform hover:scale-105 text-sm sm:text-base font-semibold shadow-[0_0_15px_rgba(34,197,94,0.3)] hover:shadow-[0_0_20px_rgba(34,197,94,0.5)] flex items-center justify-center min-w-[100px] group"
+          >
+            <span className="bg-gradient-to-r from-green-400 to-emerald-400 bg-clip-text text-transparent group-hover:from-green-300 group-hover:to-emerald-300 transition-colors">
+              Rules
+            </span>
+          </button>
+          {playerColor && (
+            <div className="relative">
+              <button
+                onClick={() => setShowChat(true)}
+                className="px-4 py-2 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-indigo-500/30 hover:border-indigo-400/50 transition-all duration-300 transform hover:scale-105 text-sm sm:text-base font-semibold shadow-[0_0_15px_rgba(99,102,241,0.3)] hover:shadow-[0_0_20px_rgba(99,102,241,0.5)] flex items-center justify-center min-w-[100px] group"
+              >
+                <span className="bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent group-hover:from-indigo-300 group-hover:to-purple-300 transition-colors">
+                  Chat
+                </span>
+              </button>
+              {hasUnreadMessages && (
+                <div className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+              )}
+            </div>
+          )}
+        </div>
+      </div>
       <div className="relative h-6 mb-1 flex items-center justify-center px-4">
         {respondingToCheckBoard && (
           <p className="absolute text-sm md:text-lg text-red-700 font-bold animate-pulse whitespace-nowrap">
@@ -904,8 +1047,14 @@ const handleSquareClick = (
           </p>
         )}
       </div>
-      <h3 className="text-lg md:text-xl font-semibold mb-1 text-indigo-700">
-        {gameFinished ? `Game Over: ${winner || "Unknown Result"}` : `${turn}'s turn on the ${serverActiveBoardPhase} board`}
+      <h3 className="text-lg md:text-xl font-semibold mb-1 text-gray-400">
+        <span className="text-gray-400">It&apos;s </span>
+        <span className={`${turn === "White" ? "text-white" : "text-black drop-shadow-[0_0_2px_rgba(255,255,255,0.5)]"}`}>
+          {turn}
+        </span>
+        <span className="text-gray-400">&apos;s turn on the </span>
+        <span className="text-gray-400">{serverActiveBoardPhase}</span>
+        <span className="text-gray-400"> board</span>
       </h3>
 
       <div 
@@ -918,8 +1067,8 @@ const handleSquareClick = (
           style={{
             transform: activeBoard === "main" ? "none" : "translate(10px, 10px)",
             zIndex: activeBoard === "main" ? 2 : 1,
-            opacity: activeBoard === "main" ? 1 : (mainBoardOutcome !== "active" ? 0 : boardOpacity.main),
-            filter: activeBoard === "main" ? "none" : (mainBoardOutcome !== "active" ? "grayscale(90%)" : "grayscale(90%)"),
+            opacity: activeBoard === "main" ? 1 : (mainBoardOutcome !== "active" ? 0 : 1),
+            filter: activeBoard === "main" ? "none" : (mainBoardOutcome !== "active" ? "grayscale(90%)" : "grayscale(50%)"),
             transition: "transform 0.3s ease-in-out, opacity 0.8s ease-in-out, filter 0.8s ease-in-out, box-shadow 0.3s ease-in-out",
             boxShadow: activeBoard === "main" ? "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)" : "none",
           }}
@@ -941,8 +1090,8 @@ const handleSquareClick = (
           style={{
             transform: activeBoard === "secondary" ? "none" : "translate(10px, 10px)",
             zIndex: activeBoard === "secondary" ? 2 : 1,
-            opacity: activeBoard === "secondary" ? 1 : (secondaryBoardOutcome !== "active" ? 0.7 : boardOpacity.secondary),
-            filter: activeBoard === "secondary" ? "none" : (secondaryBoardOutcome !== "active" ? "grayscale(90%)" : "grayscale(90%)"),
+            opacity: activeBoard === "secondary" ? 1 : (secondaryBoardOutcome !== "active" ? 0.7 : 1),
+            filter: activeBoard === "secondary" ? "none" : (secondaryBoardOutcome !== "active" ? "grayscale(90%)" : "grayscale(50%)"),
             transition: "transform 0.3s ease-in-out, opacity 0.8s ease-in-out, filter 0.8s ease-in-out, box-shadow 0.3s ease-in-out",
             boxShadow: activeBoard === "secondary" ? "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)" : "none",
           }}
@@ -960,23 +1109,10 @@ const handleSquareClick = (
         </div>
       </div>
 
-      {/* Mobile Board Switch Button */}
-      <button
-        onClick={() => {
-          if (visualUpdateTimeoutRef.current) {
-            clearTimeout(visualUpdateTimeoutRef.current);
-            visualUpdateTimeoutRef.current = null;
-          }
-          setActiveBoard(prev => prev === "main" ? "secondary" : "main");
-          setSelectedPieceSquare(null);
-          setPossibleMoves([]);
-        }}
-        className="md:hidden mt-4 px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-indigo-500/30 hover:border-indigo-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(99,102,241,0.3)] hover:shadow-[0_0_20px_rgba(99,102,241,0.5)] flex items-center justify-center min-w-[160px] group"
-      >
-        <span className="bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent group-hover:from-indigo-300 group-hover:to-purple-300 transition-colors">
-          Switch to {activeBoard === "main" ? "Secondary" : "Main"} Board
-        </span>
-      </button>
+      {/* Mobile Board Switch Text */}
+      <p className="md:hidden mt-4 text-gray-500 text-sm">
+        Double tap the board to change view
+      </p>
 
       {showCheckmateModal && (
         <div className="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -997,14 +1133,26 @@ const handleSquareClick = (
 
       <p className="text-lg text-gray-600 mt-2 hidden md:block">Press Spacebar to swap boards</p>
       <div className="flex flex-row gap-2 mt-2">
-        <button
-          onClick={resetBoard}
-          className="px-4 py-2 sm:px-6 sm:py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-blue-500/30 hover:border-blue-400/50 transition-all duration-300 transform hover:scale-105 text-sm sm:text-base font-semibold shadow-[0_0_15px_rgba(59,130,246,0.3)] hover:shadow-[0_0_20px_rgba(59,130,246,0.5)] flex items-center justify-center min-w-[140px] sm:min-w-[180px] group"
-        >
-          <span className="bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent group-hover:from-blue-300 group-hover:to-cyan-300 transition-colors">
-            Reset Both Boards
-          </span>
-        </button>
+        <div className="flex items-center space-x-2">
+          {socket && playerColor && ( // Only show vote indicators for multiplayer games
+            <div className="flex flex-col space-y-1">
+              {(["White","Black"] as const).map(col => (
+                <div
+                  key={col}
+                  className={`w-3 h-3 rounded-full ${resetVotes[col] ? "bg-blue-500" : "bg-gray-600"}`}
+                />
+              ))}
+            </div>
+          )}
+          <button
+            onClick={handleVoteReset}
+            className="px-4 py-2 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-blue-500/30 hover:border-blue-400/50 transition-all duration-300 transform hover:scale-105 text-sm sm:text-base font-semibold shadow-[0_0_15px_rgba(59,130,246,0.3)] hover:shadow-[0_0_20px_rgba(59,130,246,0.5)] flex items-center justify-center min-w-[140px] sm:min-w-[180px] group"
+          >
+            <span className="bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent group-hover:from-blue-300 group-hover:to-cyan-300 transition-colors">
+              Reset Both Boards
+            </span>
+          </button>
+        </div>
         <button
           onClick={() => setShowDebugMenu(!showDebugMenu)}
           className="px-4 py-2 sm:px-6 sm:py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-purple-500/30 hover:border-purple-400/50 transition-all duration-300 transform hover:scale-105 text-sm sm:text-base font-semibold shadow-[0_0_15px_rgba(168,85,247,0.3)] hover:shadow-[0_0_20px_rgba(168,85,247,0.5)] flex items-center justify-center min-w-[140px] sm:min-w-[180px] group"
@@ -1133,6 +1281,138 @@ const handleSquareClick = (
               Castle {rookOpt.type.charAt(0).toUpperCase() + rookOpt.type.slice(1)}
             </button>
           ))}
+        </div>
+      )}
+
+      {/* Chat Modal */}
+      {showChat && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-gray-900 rounded-lg p-4 w-[90%] max-w-md border border-indigo-500/30 shadow-[0_0_20px_rgba(99,102,241,0.3)]">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold text-indigo-400">Game Chat</h3>
+              <button
+                onClick={() => setShowChat(false)}
+                className="text-gray-400 hover:text-gray-200 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="h-64 overflow-y-auto mb-4 border border-indigo-500/30 rounded p-2 bg-gray-800/50">
+              {chatMessages.map((msg, index) => (
+                <div key={index} className="mb-2 text-left">
+                  <span className={`font-bold ${msg.sender === myColor ? 'text-indigo-400' : 'text-gray-300'}`}>
+                    {msg.sender === "White" ? "⚪ White" : "⚫ Black"}:
+                  </span>
+                  <span className="ml-2 text-gray-200">{msg.message}</span>
+                </div>
+              ))}
+              <div ref={chatEndRef} />
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                placeholder="Type a message..."
+                className="flex-1 px-3 py-2 bg-gray-800 border border-indigo-500/30 rounded text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              />
+              <button
+                onClick={handleSendMessage}
+                className="px-4 py-2 bg-gray-800 text-white rounded border border-indigo-500/30 hover:border-indigo-400/50 transition-all duration-300 transform hover:scale-105 font-semibold shadow-[0_0_15px_rgba(99,102,241,0.3)] hover:shadow-[0_0_20px_rgba(99,102,241,0.5)]"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rules Modal */}
+      {showRules && (
+        <div 
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+          onClick={() => setShowRules(false)}
+        >
+          <div 
+            className="bg-gray-900 rounded-lg p-6 w-[90%] max-w-2xl max-h-[90vh] border border-green-500/30 shadow-[0_0_20px_rgba(34,197,94,0.3)] overflow-y-auto"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-2xl font-bold text-green-400">Game Rules</h3>
+              <button
+                onClick={() => setShowRules(false)}
+                className="text-gray-400 hover:text-gray-200 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-6 text-gray-200 text-left">
+              <div>
+                <h4 className="text-xl font-semibold text-green-400 mb-2">General Board Rules</h4>
+                <ul className="list-disc pl-6 space-y-2">
+                  <li>Normal Chess moves.</li>
+                  <li>If either board ends up in Checkmate, game ends.</li>
+                  <li>If either board is in Stalemate, rest of the game is played normally on the other board.</li>
+                  <li>If player gets in a Check, player is only allowed to move the boards pieces they are checked in to get out of Check.</li>
+                  <li>If player causes a Check, player is not allowed to make more moves. Turn changes immediately to the defender.</li>
+                  <li>En passant move in either board captures the pawn from both boards.</li>
+                  <li>Castling is only allowed in one board per game.</li>
+                </ul>
+              </div>
+              <div>
+                <h4 className="text-xl font-semibold text-green-400 mb-2">Specified Board Rules</h4>
+                <div className="space-y-4">
+                  <div>
+                    <h5 className="text-lg font-semibold text-green-300">Main Board</h5>
+                    <ul className="list-disc pl-6 space-y-1">
+                      <li>Capturing a piece affects the same piece in Secondary board.</li>
+                    </ul>
+                  </div>
+                  <div>
+                    <h5 className="text-lg font-semibold text-green-300">Secondary Board</h5>
+                    <ul className="list-disc pl-6 space-y-1">
+                      <li>Capturing a piece does not affect the same piece in Main board, only exception is En passant.</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Disconnected Modal */}
+      {showDisconnectedModal && (
+        <div className="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-gray-900/95 rounded-lg border border-red-500/30 p-6 max-w-md w-[90%] shadow-[0_0_20px_rgba(239,68,68,0.3)]">
+            <div className="flex justify-between items-start mb-6">
+              <h2 className="text-2xl font-bold text-red-400">Game Ended</h2>
+              <button
+                onClick={() => {
+                  setShowDisconnectedModal(false);
+                  window.location.href = "/multiplayer";
+                }}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-gray-300 mb-6">The other player has disconnected from the game.</p>
+            <div className="flex justify-center">
+              <button
+                onClick={() => {
+                  setShowDisconnectedModal(false);
+                  window.location.href = "/multiplayer";
+                }}
+                className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-red-500/30 hover:border-red-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(239,68,68,0.3)] hover:shadow-[0_0_20px_rgba(239,68,68,0.5)] flex items-center justify-center min-w-[200px] group"
+              >
+                <span className="bg-gradient-to-r from-red-400 to-pink-400 bg-clip-text text-transparent group-hover:from-red-300 group-hover:to-pink-300 transition-colors">
+                  Return to Multiplayer
+                </span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

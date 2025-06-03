@@ -70,8 +70,8 @@ export default function LocalGame() {
           playerColor={null} // Pass null to allow playing both colors
         />
         <div className="mt-8 flex justify-center">
-          <ReturnToMainMenu />
-        </div>
+      <ReturnToMainMenu />
+    </div>
       </div>
     </PageLayout>
   );

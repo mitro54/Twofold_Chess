@@ -141,16 +141,20 @@ const HistoryPage: React.FC = () => {
       black_moves: game.moves.filter((_, i) => i % 2 === 1).length,
       
       // Move sequence (encoded for ML)
-      moves: game.moves.map((move, index) => ({
-        move_number: Math.floor(index / 2) + 1,
-        player: index % 2 === 0 ? 'white' : 'black',
-        move: move,
-        is_checkmate_move: index === game.moves.length - 1 && game.end_reason === 'checkmate',
-        is_capture: move.includes('x'),
-        is_castling: move.includes('O-O'),
-        is_promotion: move.includes('='),
-        is_check: move.includes('+'),
-      })),
+      moves: game.moves.map((move, index) => {
+        // Extract player color from the move string (e.g., "White: e4 on main board")
+        const playerColor = move.split(':')[0].toLowerCase();
+        return {
+          move_number: index + 1,
+          player: playerColor,
+          move: move,
+          is_checkmate_move: index === game.moves.length - 1 && game.end_reason === 'checkmate',
+          is_capture: move.includes('x'),
+          is_castling: move.includes('O-O'),
+          is_promotion: move.includes('='),
+          is_check: move.includes('+'),
+        };
+      }),
       
       // Game outcome features
       outcome: {
@@ -187,7 +191,7 @@ const HistoryPage: React.FC = () => {
   }
 
   return (
-    <PageLayout title="Games History" titleClassName="mt-8 mb-8">
+    <PageLayout title="Games History" titleClassName="mt-8 mb-8" allowScroll={true}>
       <div className="w-full">
       <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mb-6">
         <div className="flex flex-col sm:flex-row gap-4 items-center">

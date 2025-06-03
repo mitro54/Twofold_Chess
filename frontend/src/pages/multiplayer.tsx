@@ -14,7 +14,8 @@ interface Lobby {
 }
 
 export default function MultiplayerSetup() {
-  const [username, setUsername] = useState("");
+  /* every tab gets an internal handle – never shown in the UI */
+  const [username] = useState(() => uuidv4().slice(0, 8));
   const [room, setRoom] = useState("");
   const [gameStarted, setGameStarted] = useState(false);
   const [showLobbies, setShowLobbies] = useState(false);
@@ -57,6 +58,10 @@ export default function MultiplayerSetup() {
       if (reason === "io server disconnect") {
         alert("Disconnected from server. Please refresh the page.");
       }
+      // If we're in a game, emit player_disconnected to notify the other player
+      if (gameStarted && room) {
+        newSocket.emit("leave_room", { room, username });
+      }
     });
 
     newSocket.on("lobby_list", (lobbyList: Lobby[]) => {
@@ -91,7 +96,7 @@ export default function MultiplayerSetup() {
     newSocket.on("game_start", (data: { color: "White" | "Black"; username: string }) => {
       console.log("Game started:", data);
       if (data.username === username) {
-      setPlayerColor(data.color);
+        setPlayerColor(data.color);
       }
       setIsWaiting(false);
       setGameStarted(true);
@@ -112,6 +117,12 @@ export default function MultiplayerSetup() {
         newSocket.disconnect();
         setSocket(null);
       }
+    });
+
+    newSocket.on("player_disconnected", () => {
+      // Let Gameboard show its "opponent disconnected" modal and wait for
+      // the user to click "Return to Multiplayer".  Nothing to do here.
+      console.log("Other player disconnected – waiting for user action.");
     });
 
     setSocket(newSocket);
@@ -143,31 +154,71 @@ export default function MultiplayerSetup() {
     };
   }, [socket, username]);
 
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleLobbyList = (lobbies: Lobby[]) => {
+      setLobbies(lobbies);
+    };
+
+    const handleRoomDeleted = (data: { room: string }) => {
+      // If we're in the deleted room, redirect to home
+      if (data.room === room) {
+        setGameStarted(false);
+        setIsWaiting(false);
+        setRoom("");
+        setPlayerColor(null);
+      }
+      // Refresh lobby list
+      socket.emit("get_lobbies");
+    };
+
+    socket.on("lobby_list", handleLobbyList);
+    socket.on("room_deleted", handleRoomDeleted);
+
+    // Initial lobby fetch
+    socket.emit("get_lobbies");
+
+    return () => {
+      socket.off("lobby_list", handleLobbyList);
+      socket.off("room_deleted", handleRoomDeleted);
+    };
+  }, [socket, room]);
+
   const handleStartGame = () => {
-    if (!username.trim()) {
-      alert("Please enter a username.");
-      return;
-    }
-    if (!room.trim()) {
-      setRoom(uuidv4().slice(0, 8)); // Generate a random room ID if none provided
-    }
-    
+    // Initialize socket first
     const gameSocket = initializeSocket();
-    console.log("Creating lobby with:", { room, username, isPrivate });
-    gameSocket.emit("create_lobby", {
+    
+    // Generate room ID if none provided
+    if (!room.trim()) {
+      const randomRoom = uuidv4().slice(0, 8);
+      setRoom(randomRoom);
+      
+      // Wait for socket to be ready before creating lobby
+      gameSocket.on("connect", () => {
+        console.log("Creating lobby with:", { room: randomRoom, username, isPrivate });
+        gameSocket.emit("create_lobby", {
+          roomId: randomRoom,
+          host: username,
+          isPrivate: isPrivate
+        });
+        setIsWaiting(true);
+        setGameStarted(true);
+      });
+    } else {
+      // If room ID is provided, create lobby immediately
+      console.log("Creating lobby with:", { room, username, isPrivate });
+      gameSocket.emit("create_lobby", {
         roomId: room,
         host: username,
         isPrivate: isPrivate
       });
       setIsWaiting(true);
-    setGameStarted(true);
+      setGameStarted(true);
+    }
   };
 
   const handleJoinLobby = (roomId: string) => {
-    if (!username.trim()) {
-      alert("Please enter a username.");
-      return;
-    }
     setRoom(roomId);
     
     const gameSocket = initializeSocket();
@@ -246,16 +297,10 @@ export default function MultiplayerSetup() {
         <div className="flex flex-col space-y-4">
           <input
             type="text"
-            placeholder="Enter your username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-indigo-500/30 focus:border-indigo-400/50 focus:outline-none transition-all duration-300"
-          />
-          <input
-            type="text"
             placeholder="Enter room code (optional)"
             value={room}
             onChange={(e) => setRoom(e.target.value)}
+            autoFocus
             className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-purple-500/30 focus:border-purple-400/50 focus:outline-none transition-all duration-300"
           />
           <div className="flex items-center space-x-2">
@@ -326,8 +371,8 @@ export default function MultiplayerSetup() {
                     className="flex justify-between items-center p-4 bg-gray-700 rounded-lg"
                   >
                     <div>
-                      <p className="text-white font-semibold">Host: {lobby.host}</p>
-                      <p className="text-gray-400 text-sm">Room: {lobby.room}</p>
+                      <p className="text-white font-semibold">Room: {lobby.room}</p>
+                      <p className="text-gray-400 text-sm">Created: {new Date(lobby.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</p>
                     </div>
                     <button
                       onClick={() => handleJoinLobby(lobby.room)}
