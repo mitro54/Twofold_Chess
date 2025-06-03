@@ -1721,27 +1721,71 @@ def cleanup_stale_rooms():
         if not hasattr(cleanup_stale_rooms, 'initialized'):
             result = games_collection.delete_many({
                 "status": "ongoing",
-                "room": {"$not": {"$regex": f"^{LOCAL_ROOM_PREFIX}"}}
+                "room": {"$not": {"$regex": f"^{LOCAL_ROOM_PREFIX}"}},
+                "$or": [
+                    {"players": {"$exists": False}},
+                    {"players": []},
+                    {"players": None},
+                    {"players.0": {"$exists": False}},
+                    {"socket_ids": {"$exists": False}},
+                    {"socket_ids": {}}
+                ]
             })
             if result.deleted_count > 0:
-                logger.info(f"Cleared all {result.deleted_count} active multi-player rooms on startup")
+                logger.info(f"Cleared all {result.deleted_count} stale multi-player rooms on startup")
             cleanup_stale_rooms.initialized = True
             return
 
-        # Regular cleanup: find rooms with no players, game_over games, or stale single-player rooms
-        stale_time = datetime.datetime.utcnow() - datetime.timedelta(minutes=1)
+        # Regular cleanup: find rooms that are truly stale
+        stale_time = datetime.datetime.utcnow() - datetime.timedelta(minutes=5)  # Increased to 5 minutes
         result = games_collection.delete_many({
             "status": "ongoing",
             "room": {"$not": {"$regex": f"^{LOCAL_ROOM_PREFIX}"}},   # Skip local games
             "$or": [
-                {"game_over": True},  # Delete games that are over
-                {"players": {"$exists": False}},  # No players field
-                {"players": []},  # Empty players array
-                {"players": None},  # Null players
-                {"players.0": {"$exists": False}},  # No first player
-                {"players.1": {"$exists": False}, "createdAt": {"$lt": stale_time}},  # Stale single-player rooms
-                {"socket_ids": {"$exists": False}},  # No socket IDs
-                {"socket_ids": {}}  # Empty socket IDs
+                # Only delete if ALL of these conditions are met:
+                {
+                    "$and": [
+                        {"game_over": True},
+                        {"createdAt": {"$lt": stale_time}}
+                    ]
+                },
+                # Or if the room is completely empty
+                {
+                    "$and": [
+                        {"players": {"$exists": False}},
+                        {"createdAt": {"$lt": stale_time}}
+                    ]
+                },
+                {
+                    "$and": [
+                        {"players": []},
+                        {"createdAt": {"$lt": stale_time}}
+                    ]
+                },
+                {
+                    "$and": [
+                        {"players": None},
+                        {"createdAt": {"$lt": stale_time}}
+                    ]
+                },
+                {
+                    "$and": [
+                        {"players.0": {"$exists": False}},
+                        {"createdAt": {"$lt": stale_time}}
+                    ]
+                },
+                {
+                    "$and": [
+                        {"socket_ids": {"$exists": False}},
+                        {"createdAt": {"$lt": stale_time}}
+                    ]
+                },
+                {
+                    "$and": [
+                        {"socket_ids": {}},
+                        {"createdAt": {"$lt": stale_time}}
+                    ]
+                }
             ]
         })
         if result.deleted_count > 0:
