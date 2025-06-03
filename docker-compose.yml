@@ -1,12 +1,27 @@
+version: '3.8'
+
 services:
   backend:
     build: ./backend
     ports:
       - "0.0.0.0:5001:5001"
     environment:
-      - MONGO_URI=mongodb://mongo:27017/chess
+      - MONGO_URI=${MONGO_URI}
+      - FLASK_ENV=${FLASK_ENV}
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS}
+      - EVENTLET_NO_GREENDNS=yes
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "${BACKEND_URL}/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - chess_network
 
   mongo:
     image: mongo:latest
@@ -14,21 +29,44 @@ services:
       - "0.0.0.0:27017:27017"
     volumes:
       - mongo_data:/data/db
+    restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - chess_network
 
   frontend:
     build: ./frontend
     ports:
-      - "0.0.0.0:3000:3000"
+      - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://backend:5001
-      - DOCKER_ENV=true
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - NEXT_PUBLIC_FRONTEND_URL=${NEXT_PUBLIC_FRONTEND_URL}
+      - NODE_ENV=${NODE_ENV}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
       - NEXTAUTH_URL=${NEXTAUTH_URL}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
-    working_dir: /app
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsSL", "${BACKEND_URL}/api/health"]
+      start_period: 10s
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - chess_network
+
+networks:
+  chess_network:
+    driver: bridge
 
 volumes:
   mongo_data:
+    driver: local

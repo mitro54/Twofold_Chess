@@ -29,9 +29,12 @@ LOCAL_ROOM_PREFIX = "local_"  # Prefix for local game room IDs
 
 ######################### APPLICATION INITIALIZATION #########################
 
+# Get CORS origins from environment variable
+CORS_ORIGINS = os.getenv('CORS_ORIGINS', 'http://localhost:3000').split(',')
+
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": ["http://localhost:3000", "http://frontend:3000", "http://192.168.100.135:3000"]}})
-app.config["SECRET_KEY"] = "lalalalala"
+CORS(app, resources={r"/*": {"origins": CORS_ORIGINS}})
+app.config["SECRET_KEY"] = os.getenv('FLASK_SECRET_KEY', 'lalalalala')
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -39,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 socketio = SocketIO(
     app,
-    cors_allowed_origins=["http://localhost:3000", "http://frontend:3000", "http://192.168.100.135:3000"],
+    cors_allowed_origins=CORS_ORIGINS,
     async_mode='eventlet',
     ping_timeout=60,
     ping_interval=25,
@@ -1802,3 +1805,7 @@ if __name__ == "__main__":
     scheduler.add_job(cleanup_stale_rooms, 'interval', seconds=30)  # Run cleanup every 30 seconds
     scheduler.start()
     socketio.run(app, host="0.0.0.0", port=5001)
+
+@app.route("/api/health", methods=["GET"])
+def health_check():                    # docker-compose uses this
+    return {"status": "ok"}, 200

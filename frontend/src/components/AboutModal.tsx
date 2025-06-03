@@ -48,11 +48,16 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
               Technical Features
             </h3>
             <ul className="list-disc pl-6 space-y-2 text-left">
-              <li>Real-time multiplayer gameplay using WebSocket technology</li>
-              <li>Game history tracking and analysis</li>
+              <li>Real-time multiplayer gameplay with WebSocket technology and Socket.IO</li>
+              <li>Dual-board game mechanics with synchronized piece captures</li>
+              <li>Advanced game state management and move validation</li>
+              <li>Comprehensive game history tracking and analysis tools</li>
               <li>Dataset generation for machine learning research</li>
-              <li>Responsive design for all devices</li>
-              <li>Modern UI with smooth animations</li>
+              <li>Responsive design optimized for all devices</li>
+              <li>Modern UI with smooth animations and transitions</li>
+              <li>Secure authentication and session management</li>
+              <li>Real-time chat system for player communication</li>
+              <li>Automatic game state recovery after disconnections</li>
             </ul>
           </section>
 
@@ -64,7 +69,7 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
             <p className="leading-relaxed">
               The project includes features for collecting game data that can be used to train AI models. 
               Players can download their game history in a structured format suitable for machine learning research.
-              In the future, we plan to implement an AI opponent mode where players can challenge models trained on 
+              In the future, plan is to implement an AI opponent mode where players can challenge models trained on 
               the collected game data, creating a unique opportunity to play against strategies learned from the community.
             </p>
           </section>
@@ -76,13 +81,14 @@ const AboutModal: React.FC<AboutModalProps> = ({ isOpen, onClose }) => {
             </h3>
             <p className="leading-relaxed">
               Twofold Chess is an open-source project. The codebase is available on GitHub for anyone interested 
-              in contributing or learning from the implementation.
+              in contributing or learning from the implementation<a href="https://github.com/mitro54/Twofold_Chess" className="text-indigo-400 hover:text-indigo-300"> here</a>.
+              Dont know how to code but want to help? Play a game and report bugs!
             </p>
           </section>
 
           <div className="pt-4 border-t border-gray-700">
             <p className="text-sm text-gray-400">
-              Built with Next.js, TypeScript, Tailwind CSS, and Socket.IO
+              Built with Next.js, TypeScript, Tailwind CSS, Flask, Socket.IO, and MongoDB
             </p>
           </div>
         </div>
