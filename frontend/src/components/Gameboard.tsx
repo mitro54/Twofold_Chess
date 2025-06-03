@@ -154,6 +154,8 @@ const Gameboard: React.FC<GameboardProps> = ({
   const [showRules, setShowRules] = useState(false);
   const [hasInitializedBoard, setHasInitializedBoard] = useState(false);
 
+  const [showDisconnectedModal, setShowDisconnectedModal] = useState(false);
+
   // Helper to determine castling rights and eligible rooks for the selected king
   const getCastlingOptions = (
     board: ChessBoardType,
@@ -298,7 +300,7 @@ const Gameboard: React.FC<GameboardProps> = ({
 
     const handleGameState = (data: GameStateData) => {
       console.log("Game state update received:", JSON.stringify(data, null, 2));
-      if (data) {
+      if (data && data.mainBoard && data.secondaryBoard) {
         // Force React to recognize the state change by creating new arrays
         const newMainBoard = data.mainBoard.map(row => [...row]);
         const newSecondaryBoard = data.secondaryBoard.map(row => [...row]);
@@ -982,6 +984,18 @@ const handleSquareClick = (
     }
   };
 
+  useEffect(() => {
+    if (!socket) return;
+
+    socket.on("player_disconnected", () => {
+      setShowDisconnectedModal(true);
+    });
+
+    return () => {
+      socket.off("player_disconnected");
+    };
+  }, [socket]);
+
   return (
     <div className="flex flex-col items-center select-none">
       <div className="flex flex-col items-center w-full max-w-[600px] px-4 mb-2">
@@ -1363,6 +1377,40 @@ const handleSquareClick = (
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Disconnected Modal */}
+      {showDisconnectedModal && (
+        <div className="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-gray-900/95 rounded-lg border border-red-500/30 p-6 max-w-md w-[90%] shadow-[0_0_20px_rgba(239,68,68,0.3)]">
+            <div className="flex justify-between items-start mb-6">
+              <h2 className="text-2xl font-bold text-red-400">Game Ended</h2>
+              <button
+                onClick={() => {
+                  setShowDisconnectedModal(false);
+                  window.location.href = "/multiplayer";
+                }}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="text-gray-300 mb-6">The other player has disconnected from the game.</p>
+            <div className="flex justify-center">
+              <button
+                onClick={() => {
+                  setShowDisconnectedModal(false);
+                  window.location.href = "/multiplayer";
+                }}
+                className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-red-500/30 hover:border-red-400/50 transition-all duration-300 transform hover:scale-105 text-base font-semibold shadow-[0_0_15px_rgba(239,68,68,0.3)] hover:shadow-[0_0_20px_rgba(239,68,68,0.5)] flex items-center justify-center min-w-[200px] group"
+              >
+                <span className="bg-gradient-to-r from-red-400 to-pink-400 bg-clip-text text-transparent group-hover:from-red-300 group-hover:to-pink-300 transition-colors">
+                  Return to Multiplayer
+                </span>
+              </button>
             </div>
           </div>
         </div>

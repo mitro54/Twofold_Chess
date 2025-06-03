@@ -23,6 +23,10 @@ import datetime
 import time
 from apscheduler.schedulers.background import BackgroundScheduler
 
+######################### CONSTANTS #########################
+
+LOCAL_ROOM_PREFIX = "local_"  # Prefix for local game room IDs
+
 ######################### APPLICATION INITIALIZATION #########################
 
 app = Flask(__name__)
@@ -59,6 +63,81 @@ def handle_connect():
 @socketio.on('disconnect')
 def handle_disconnect():
     logger.info(f"Client disconnected: {request.sid}")
+    
+    try:
+        # Find all games where this socket ID is used
+        games = list(games_collection.find(
+            {"socket_ids": {"$exists": True}}
+        ))
+        
+        for game in games:
+            room = game["room"]
+            disconnected_username = None
+            
+            # Find which username owns this socket ID
+            for username, socket_id in game.get("socket_ids", {}).items():
+                if socket_id == request.sid:
+                    disconnected_username = username
+                    break
+            
+            if disconnected_username:
+                logger.info(f"Player {disconnected_username} disconnected from room {room}")
+                
+                # Notify other players immediately
+                emit(
+                    "player_disconnected",
+                    {"message": f"Player {disconnected_username} disconnected"},
+                    room=room,
+                )
+                
+                # Update game state
+                game_state = games_collection.find_one({"_id": game["_id"]})
+                if game_state:
+                    # Remove the disconnected player
+                    if disconnected_username in game_state.get("players", []):
+                        game_state["players"].remove(disconnected_username)
+                    if disconnected_username in game_state.get("player_colors", {}):
+                        del game_state["player_colors"][disconnected_username]
+                    if disconnected_username in game_state.get("socket_ids", {}):
+                        del game_state["socket_ids"][disconnected_username]
+                    
+                    # If no players left, delete the game
+                    if not game_state["players"]:
+                        logger.info(f"Deleting empty room {room}")
+                        games_collection.delete_one({"_id": game_state["_id"]})
+                        socketio.emit("room_deleted", {"room": room})
+                    else:
+                        # Mark game as over for remaining player
+                        game_state["game_over"] = True
+                        game_state["status"] = "Game aborted - opponent disconnected"
+                        games_collection.update_one(
+                            {"_id": game_state["_id"]},
+                            {"$set": game_state}
+                        )
+                        # Push the frozen state to remaining player
+                        socketio.emit(
+                            "game_update",
+                            serialize_game_state(game_state),
+                            room=room
+                        )
+                        logger.info(f"Room {room}: flagged game_over after {disconnected_username} disconnected")
+                
+                # Broadcast updated lobby list
+                lobbies = list(games_collection.find(
+                    {"is_private": False, "players.1": {"$exists": False}, "status": "ongoing", "game_over": {"$ne": True}},
+                    {"room": 1, "host": 1, "is_private": 1, "createdAt": 1, "_id": 0}
+                ))
+                for lobby in lobbies:
+                    if isinstance(lobby.get("createdAt"), datetime.datetime):
+                        lobby["createdAt"] = int(lobby["createdAt"].timestamp() * 1000)
+                socketio.emit("lobby_list", lobbies)
+                
+                # Leave the socket room
+                leave_room(room)
+                break
+    
+    except Exception as e:
+        logger.error(f"Error handling disconnect: {str(e)}")
 
 @socketio.on('error')
 def handle_error(error):
@@ -99,13 +178,13 @@ def on_vote_reset(data):
 
         # Update the game state with new votes
         result = games_collection.update_one(
-            {"room": room},
+            {"_id": game_state["_id"]},
             {"$set": {"reset_votes": votes}}
         )
         logger.info(f"Database update result: {result.modified_count} documents modified")
 
         # Verify the update
-        updated_state = games_collection.find_one({"room": room})
+        updated_state = games_collection.find_one({"_id": game_state["_id"]})
         current_votes = updated_state.get("reset_votes", {})
         logger.info(f"Verified votes in database: {current_votes}")
 
@@ -115,11 +194,25 @@ def on_vote_reset(data):
         # Check if both colors have voted
         if len(current_votes) == 2:
             logger.info(f"Both players have voted to reset in room {room}")
-            # Reset game state
+            
+            # Generate new game ID
+            new_game_id = str(ObjectId())
+            
+            # Create initial board
             initial_board = create_initial_board()
+            
+            # Create new game state with new ID
             reset_state = {
+                "_id": new_game_id,
+                "room": room,
+                "host": game_state.get("host"),
+                "is_private": game_state.get("is_private", False),
+                "createdAt": datetime.datetime.utcnow(),
+                "players": game_state.get("players", []),
+                "player_colors": game_state.get("player_colors", {}),
+                "socket_ids": game_state.get("socket_ids", {}),
                 "mainBoard": initial_board,
-                "secondaryBoard": initial_board,
+                "secondaryBoard": copy.deepcopy(initial_board),
                 "turn": "White",
                 "active_board_phase": "main",
                 "moves": [],
@@ -132,19 +225,21 @@ def on_vote_reset(data):
                 "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
                 "en_passant_target": {"main": None, "secondary": None},
                 "reset_votes": {},  # Clear votes after reset
+                "position_history": {  # Initialize fresh position history
+                    "main": [],
+                    "secondary": []
+                }
             }
 
-            # Update database with reset state
-            games_collection.update_one(
-                {"room": room},
-                {"$set": reset_state}
-            )
+            # Delete the old game and insert the new one
+            games_collection.delete_one({"_id": game_state["_id"]})
+            games_collection.insert_one(reset_state)
 
             # Clear vote indicators
             socketio.emit("reset_votes_update", {"votes": {}}, room=room)
             # Push new game state
             socketio.emit("game_reset", serialize_game_state(reset_state), room=room)
-            logger.info(f"Game reset completed for room {room}")
+            logger.info(f"Game reset completed for room {room} with new ID {new_game_id}")
 
     except Exception as e:
         logger.error(f"Error handling reset vote: {str(e)}")
@@ -302,7 +397,13 @@ def get_game_state():
     if not room:
         return jsonify({"error": "Room is required"}), 400
 
-    game_state = games_collection.find_one({"room": room}, {"_id": 0})
+    # Only look for ongoing games
+    game_state = games_collection.find_one({
+        "room": room,
+        "status": "ongoing",
+        "game_over": {"$ne": True}
+    }, {"_id": 0})
+
     if not game_state:
         initial_board = create_initial_board()
         game_state = {
@@ -350,7 +451,11 @@ def get_game_state():
     # Ensure the game_state sent to the client includes all necessary fields
     # This will be the game_state from DB, which now includes the new fields if newly created
     # or if fetched after a reset.
-    final_game_state_for_client = games_collection.find_one({"room": room})
+    final_game_state_for_client = games_collection.find_one({
+        "room": room,
+        "status": "ongoing",
+        "game_over": {"$ne": True}
+    })
     if final_game_state_for_client: # Should always exist here
         emit("game_state", serialize_game_state(final_game_state_for_client), room=room)
         print(f"Player {username} joined room {room}. Game state sent.")
@@ -400,7 +505,7 @@ DEBUG_SCENARIOS = {
             b := create_empty_board(),
             b[0].__setitem__(0, "k"), # Black King a8
             b[2].__setitem__(0, "K"), # White King a6 (b2[0] is row 2, col 0)
-                                    # White Queen at c7 to control b8, b7, c8. (b[1][2] = 'Q')
+                                     # White Queen at c7 to control b8, b7, c8. (b[1][2] = 'Q')
             b[1].__setitem__(2, "Q"),
             b
         )[-1],
@@ -711,10 +816,10 @@ def setup_debug_scenario(scenario_name):
         m_outcome = game_doc["main_board_outcome"]
         s_outcome = game_doc["secondary_board_outcome"]
         if (m_outcome == "white_wins" and (s_outcome == "white_wins" or s_outcome == "draw_stalemate" or s_outcome == "active")) or \
-        (s_outcome == "white_wins" and (m_outcome == "white_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
+           (s_outcome == "white_wins" and (m_outcome == "white_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
             if not (m_outcome == "black_wins" or s_outcome == "black_wins"): game_doc["winner"] = "White"
         elif (m_outcome == "black_wins" and (s_outcome == "black_wins" or s_outcome == "draw_stalemate" or s_outcome == "active")) or \
-            (s_outcome == "black_wins" and (m_outcome == "black_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
+             (s_outcome == "black_wins" and (m_outcome == "black_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
             if not (m_outcome == "white_wins" or s_outcome == "white_wins"): game_doc["winner"] = "Black"
         elif m_outcome == "draw_stalemate" and s_outcome == "draw_stalemate":
             game_doc["winner"] = "Draw"
@@ -768,7 +873,8 @@ def on_join(data):
         # Check if room exists and is active
         game_state = games_collection.find_one({
             "room": room,
-            "status": "ongoing"  # Only check for ongoing games
+            "status": "ongoing",  # Only check for ongoing games
+            "game_over": {"$ne": True}  # Ensure game is not over
         })
         if not game_state:
             logger.error(f"Game state not found for room {room} or game is not active")
@@ -785,6 +891,11 @@ def on_join(data):
         join_room(room)
         logger.info(f"{username} joined room {room}")
         
+        # Store socket ID for this player
+        if "socket_ids" not in game_state:
+            game_state["socket_ids"] = {}
+        game_state["socket_ids"][username] = request.sid
+        
         # Second player joins
         if len(game_state.get("players", [])) < 2:
             # Second player gets opposite color of first player
@@ -797,11 +908,12 @@ def on_join(data):
             
             logger.info(f"Updating game state with new player: {username} as {second_player_color}")
             games_collection.update_one(
-                {"room": room},
+                {"_id": game_state["_id"]},  # Use game ID for update
                 {
                     "$set": {
                         "players": game_state["players"],
-                        "player_colors": game_state["player_colors"]
+                        "player_colors": game_state["player_colors"],
+                        "socket_ids": game_state["socket_ids"]
                     }
                 }
             )
@@ -819,24 +931,24 @@ def on_join(data):
             )
 
             logger.info(f"Second player {username} joined room {room} as {second_player_color}")
-            
-            # Ensure the game_state sent to the client includes all necessary fields
-            final_game_state_for_client = games_collection.find_one({"room": room})
-            if final_game_state_for_client:
-                emit("game_state", serialize_game_state(final_game_state_for_client), room=room)
-                logger.info(f"Game state sent to {username} in room {room}")
-            else:
-                logger.error(f"Game state not found for room {room} after join attempt")
-            
-            # Broadcast updated lobby list to all clients
-            lobbies = list(games_collection.find(
-                {"is_private": False, "players.1": {"$exists": False}, "status": "ongoing"},
-                {"room": 1, "host": 1, "is_private": 1, "createdAt": 1, "_id": 0}
-            ).sort("createdAt", -1))
-            for lobby in lobbies:
-                if isinstance(lobby.get("createdAt"), datetime.datetime):
-                    lobby["createdAt"] = int(lobby["createdAt"].timestamp() * 1000)
-            socketio.emit("lobby_list", lobbies)
+
+        # Ensure the game_state sent to the client includes all necessary fields
+        final_game_state_for_client = games_collection.find_one({"_id": game_state["_id"]})  # Use game ID for lookup
+        if final_game_state_for_client:
+            emit("game_state", serialize_game_state(final_game_state_for_client), room=room)
+            logger.info(f"Game state sent to {username} in room {room}")
+        else:
+            logger.error(f"Game state not found for room {room} after join attempt")
+        
+        # Broadcast updated lobby list to all clients
+        lobbies = list(games_collection.find(
+            {"is_private": False, "players.1": {"$exists": False}, "status": "ongoing", "game_over": {"$ne": True}},
+            {"room": 1, "host": 1, "is_private": 1, "createdAt": 1, "_id": 0}
+        ).sort("createdAt", -1))
+        for lobby in lobbies:
+            if isinstance(lobby.get("createdAt"), datetime.datetime):
+                lobby["createdAt"] = int(lobby["createdAt"].timestamp() * 1000)
+        socketio.emit("lobby_list", lobbies)
     except Exception as e:
         logger.error(f"Error joining game: {str(e)}")
         emit("error", {"message": "Failed to join game"})
@@ -882,37 +994,64 @@ def on_leave_room(data):
         leave_room(room)
         
         # Update game state
-        game_state = games_collection.find_one({"room": room})
+        game_state = games_collection.find_one({"room": room, "status": "ongoing"})
         if game_state:
             if username in game_state.get("players", []):
+                # Notify other players before removing the player
+                emit("player_disconnected", {"message": "Player disconnected"}, room=room)
+                
+                # Remove the player from the game state
                 game_state["players"].remove(username)
                 if username in game_state.get("player_colors", {}):
                     del game_state["player_colors"][username]
+                if username in game_state.get("socket_ids", {}):
+                    del game_state["socket_ids"][username]
                 
-                # If no players left, delete the game immediately
+                # If no players left, mark the game as completed due to disconnection
                 if not game_state["players"]:
-                    logger.info(f"Deleting empty room {room}")
-                    games_collection.delete_one({"room": room})
+                    logger.info(f"Marking game {room} as completed due to disconnection")
+                    game_state["status"] = "completed"
+                    game_state["end_reason"] = "disconnection"
+                    game_state["game_over"] = True
+                    
+                    # Only save to history if the game was properly completed (not due to disconnection)
+                    if game_state.get("winner") and game_state.get("end_reason") != "disconnection":
+                        completed_game_data = {
+                            "room": room,
+                            "winner": game_state.get("winner"),
+                            "checkmate_board": game_state.get("checkmate_board"),
+                            "moves": game_state.get("moves", []),
+                            "status": "completed",
+                            "end_reason": game_state.get("end_reason"),
+                            "main_board_outcome": game_state.get("main_board_outcome"),
+                            "secondary_board_outcome": game_state.get("secondary_board_outcome")
+                        }
+                        games_collection.insert_one(completed_game_data)
+                        logger.info(f"Game {room} saved to history")
+                    
+                    # Delete the game document since it's no longer needed
+                    games_collection.delete_one({"_id": game_state["_id"]})
+                    logger.info(f"Deleted completed game {room}")
+                    
                     # Broadcast room deletion to all clients
                     socketio.emit("room_deleted", {"room": room})
                 else:
+                    # Update the game state without marking it as completed
                     games_collection.update_one(
-                        {"room": room},
+                        {"_id": game_state["_id"]},
                         {
                             "$set": {
                                 "players": game_state["players"],
-                                "player_colors": game_state["player_colors"]
+                                "player_colors": game_state["player_colors"],
+                                "socket_ids": game_state["socket_ids"]
                             }
                         }
                     )
                     logger.info(f"Updated game state after {username} left")
         
-        # Notify other players
-        emit("player_left", {"username": username}, room=room)
-        
         # Broadcast updated lobby list
         lobbies = list(games_collection.find(
-            {"is_private": False, "players.1": {"$exists": False}},
+            {"is_private": False, "players.1": {"$exists": False}, "status": "ongoing", "game_over": {"$ne": True}},
             {"room": 1, "host": 1, "is_private": 1, "createdAt": 1, "_id": 0}
         ).sort("createdAt", -1))
         
@@ -935,11 +1074,26 @@ def on_get_lobbies():
             {
                 "is_private": False,
                 "status": "ongoing",
-                "players.1": {"$exists": False},  # Not full
-                "players.0": {"$exists": True}    # Has at least one player
+                "game_over": {"$ne": True},  # Don't show games that are over
+                "players": {"$exists": True, "$ne": []},  # Has at least one player
+                "players.1": {"$exists": False},  # Not full (no second player)
+                "$expr": {"$gt": [{"$size": "$players"}, 0]},  # Ensure players array is not empty
+                "socket_ids": {"$exists": True}  # Must have socket IDs
             },
             {"room": 1, "host": 1, "is_private": 1, "createdAt": 1, "_id": 0}
         ).sort("createdAt", -1))  # Sort by creation time, newest first
+        
+        # Clean up any empty rooms or games that are over
+        games_collection.delete_many({
+            "$or": [
+                {"status": "ongoing", "game_over": True},  # Delete games that are over
+                {"status": "ongoing", "players": {"$exists": False}},  # No players field
+                {"status": "ongoing", "players": []},  # Empty players array
+                {"status": "ongoing", "players": None},  # Null players
+                {"status": "ongoing", "players.0": {"$exists": False}},  # No first player
+                {"status": "ongoing", "socket_ids": {"$exists": False}}  # No socket IDs
+            ]
+        })
         
         # Convert datetime to timestamp for JSON serialization
         for lobby in lobbies:
@@ -972,10 +1126,28 @@ def on_create_lobby(data):
             emit("error", {"message": "Invalid lobby data"})
             return
 
+        # Generate a unique game ID
+        game_id = str(ObjectId())
+
+        # First, clean up any stale rooms with this name, but ONLY ongoing games
+        games_collection.delete_many({
+            "room": room_id,
+            "status": "ongoing",  # Only delete ongoing games
+            "$or": [
+                {"game_over": True},
+                {"players": {"$exists": False}},
+                {"players": []},
+                {"players": None},
+                {"players.0": {"$exists": False}},
+                {"socket_ids": {"$exists": False}}
+            ]
+        })
+
         # Check if room exists and is active
         existing_room = games_collection.find_one({
             "room": room_id,
-            "status": "ongoing"  # Only check for ongoing games
+            "status": "ongoing",  # Only check for ongoing games
+            "game_over": {"$ne": True}  # Ensure game is not over
         })
         if existing_room:
             logger.error(f"Room {room_id} already exists and is active")
@@ -985,19 +1157,21 @@ def on_create_lobby(data):
         # Randomly assign host's color
         host_color = random.choice(["White", "Black"])
 
-        # Create initial game state
+        # Create initial game state with ALL required fields explicitly set
         initial_board = create_initial_board()
         current_time = datetime.datetime.utcnow()
         game_state = {
+            "_id": game_id,  # Add unique game ID
             "room": room_id,
             "host": host,
             "is_private": is_private,
             "createdAt": current_time,
             "players": [host],
             "player_colors": {host: host_color},
+            "socket_ids": {host: request.sid},  # Store socket ID for host
             "mainBoard": initial_board,
-            "secondaryBoard": initial_board,
-            "turn": "White",
+            "secondaryBoard": copy.deepcopy(initial_board),  # Ensure distinct copy
+            "turn": "White",  # Explicitly set turn
             "active_board_phase": "main",
             "moves": [],
             "winner": None,
@@ -1009,6 +1183,10 @@ def on_create_lobby(data):
             "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
             "en_passant_target": {"main": None, "secondary": None},
             "reset_votes": {},  # Track reset votes
+            "position_history": {  # Initialize position history
+                "main": [],
+                "secondary": []
+            }
         }
 
         # Insert the new game state
@@ -1020,12 +1198,12 @@ def on_create_lobby(data):
 
         # Get updated lobby list and convert datetime to timestamp
         lobbies = list(games_collection.find(
-            {"is_private": False, "players.1": {"$exists": False}, "status": "ongoing"},
+            {"is_private": False, "players.1": {"$exists": False}, "status": "ongoing", "game_over": {"$ne": True}},
             {"room": 1, "host": 1, "is_private": 1, "createdAt": 1, "_id": 0}
         ))
         for lobby in lobbies:
             if isinstance(lobby.get("createdAt"), datetime.datetime):
-                lobby["createdAt"] = int(lobby["createdAt"].timestamp() * 1000)  # Convert to milliseconds
+                lobby["createdAt"] = int(lobby["createdAt"].timestamp() * 1000)
 
         # Broadcast updated lobby list to all clients
         socketio.emit("lobby_list", lobbies)
@@ -1043,32 +1221,63 @@ def on_reset(data):
         print("No room provided for reset")
         return
 
-    initial_board = create_initial_board()
-    game_state = {
-        "mainBoard": initial_board,
-        "secondaryBoard": initial_board,
-        "turn": "White",
-        "active_board_phase": "main",
-        "moves": [],
-        "winner": None, 
-        "status": "ongoing",
-        "main_board_outcome": "active",
-        "secondary_board_outcome": "active",
-        "game_over": False,
-        "is_responding_to_check_on_board": None,
-        "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
-        "en_passant_target": {"main": None, "secondary": None},
-    }
-    
-    # Ensure secondaryBoard is a distinct copy
-    game_state["secondaryBoard"] = copy.deepcopy(game_state["mainBoard"])
+    try:
+        # First check if the game exists (either ongoing or local)
+        existing_game = games_collection.find_one({
+            "room": room,
+            "$or": [
+                {"status": "ongoing"},
+                {"room": {"$regex": "^local_"}}  # Match local game rooms
+            ]
+        })
+        
+        if not existing_game:
+            print(f"Game {room} not found")
+            return
 
-    games_collection.update_one(
-        {"room": room}, {"$set": game_state}, upsert=True
-    )
-    # Emit the game_state that was set, ensuring it includes _id if client expects it (serialize if needed)
-    # For game_reset, usually we send the clean state.
-    socketio.emit("game_reset", serialize_game_state(game_state.copy()), room=room) # Send a copy
+        # Generate a new game ID
+        new_game_id = str(ObjectId())
+
+        initial_board = create_initial_board()
+        game_state = {
+            "_id": new_game_id,  # New game ID
+            "room": room,
+            "host": existing_game.get("host"),
+            "is_private": existing_game.get("is_private", False),
+            "createdAt": datetime.datetime.utcnow(),
+            "players": existing_game.get("players", []),
+            "player_colors": existing_game.get("player_colors", {}),
+            "socket_ids": existing_game.get("socket_ids", {}),
+            "mainBoard": initial_board,
+            "secondaryBoard": copy.deepcopy(initial_board),
+            "turn": "White",
+            "active_board_phase": "main",
+            "moves": [],
+            "winner": None,
+            "status": "ongoing",
+            "main_board_outcome": "active",
+            "secondary_board_outcome": "active",
+            "game_over": False,
+            "is_responding_to_check_on_board": None,
+            "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
+            "en_passant_target": {"main": None, "secondary": None},
+            "reset_votes": {},  # Clear reset votes
+            "position_history": {  # Initialize fresh position history
+                "main": [],
+                "secondary": []
+            }
+        }
+
+        # Delete the old game and insert the new one
+        games_collection.delete_one({"_id": existing_game["_id"]})
+        games_collection.insert_one(game_state)
+
+        # Emit the new game state
+        socketio.emit("game_reset", serialize_game_state(game_state), room=room)
+        print(f"Game {room} reset successfully with new ID {new_game_id}")
+    except Exception as e:
+        logger.error(f"Error resetting game: {str(e)}")
+        emit("error", {"message": "Failed to reset game"})
 
 # WebSocket: Handle move events
 @socketio.on("move")
@@ -1081,9 +1290,14 @@ def on_move(data):
         emit("move_error", {"message": "Invalid move data received."})
         return
 
-    game_doc_cursor = games_collection.find_one({"room": room})
+    # Only look for ongoing games
+    game_doc_cursor = games_collection.find_one({
+        "room": room,
+        "status": "ongoing",
+        "game_over": {"$ne": True}
+    })
     if not game_doc_cursor:
-        emit("move_error", {"message": "Game not found."})
+        emit("move_error", {"message": "Game not found or not active."})
         return
     game_doc = dict(game_doc_cursor)
 
@@ -1223,7 +1437,7 @@ def on_move(data):
 
     # Update castling rights
     cr = {"White": {"K": board.has_kingside_castling_rights(chess.WHITE), "Q": board.has_queenside_castling_rights(chess.WHITE)},
-        "Black": {"K": board.has_kingside_castling_rights(chess.BLACK), "Q": board.has_queenside_castling_rights(chess.BLACK)}}
+          "Black": {"K": board.has_kingside_castling_rights(chess.BLACK), "Q": board.has_queenside_castling_rights(chess.BLACK)}}
     game_doc["castling_rights"] = cr
 
     # Convert back to array, preserving IDs
@@ -1315,7 +1529,9 @@ def on_move(data):
         }
         games_collection.insert_one(completed_game_data)
         
-        games_collection.update_one({"room": room}, {"$set": game_doc})
+        # Create update doc without _id
+        update_doc = {k: v for k, v in game_doc.items() if k != '_id'}
+        games_collection.update_one({"_id": game_doc["_id"]}, {"$set": update_doc})
         socketio.emit("game_update", serialize_game_state(game_doc), room=room)
         return
 
@@ -1329,7 +1545,8 @@ def on_move(data):
             game_doc["game_over"] = True
             game_doc["winner"] = current_player_color
             game_doc["status"] = f"{current_player_color} wins by checkmate on {board_type_played} board (after escaping check)."
-        games_collection.update_one({"room": room}, {"$set": game_doc})
+        update_doc = {k: v for k, v in game_doc.items() if k != '_id'}
+        games_collection.update_one({"_id": game_doc["_id"]}, {"$set": update_doc})
         socketio.emit("game_update", serialize_game_state(game_doc), room=room)
         return
 
@@ -1339,7 +1556,8 @@ def on_move(data):
         game_doc["active_board_phase"] = board_type_played
         game_doc["is_responding_to_check_on_board"] = board_type_played
         game_doc["status"] = f"{opponent_color} is in check on {board_type_played} board."
-        games_collection.update_one({"room": room}, {"$set": game_doc})
+        update_doc = {k: v for k, v in game_doc.items() if k != '_id'}
+        games_collection.update_one({"_id": game_doc["_id"]}, {"$set": update_doc})
         socketio.emit("game_update", serialize_game_state(game_doc), room=room)
         return
 
@@ -1425,17 +1643,17 @@ def on_move(data):
     s_outcome = game_doc["secondary_board_outcome"]
     if not game_doc.get("winner"):
         if (m_outcome == "white_wins" and (s_outcome == "white_wins" or s_outcome == "draw_stalemate" or s_outcome == "active")) or \
-        (s_outcome == "white_wins" and (m_outcome == "white_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
+           (s_outcome == "white_wins" and (m_outcome == "white_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
             if not (m_outcome == "black_wins" or s_outcome == "black_wins"):
                 game_doc["winner"] = "White"
         elif (m_outcome == "black_wins" and (s_outcome == "black_wins" or s_outcome == "draw_stalemate" or s_outcome == "active")) or \
-            (s_outcome == "black_wins" and (m_outcome == "black_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
+             (s_outcome == "black_wins" and (m_outcome == "black_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
             if not (m_outcome == "white_wins" or s_outcome == "white_wins"):
                 game_doc["winner"] = "Black"
         elif m_outcome == "draw_stalemate" and s_outcome == "draw_stalemate":
             game_doc["winner"] = "Draw"
         elif (m_outcome == "draw_stalemate" and s_outcome == "active" and not has_any_legal_moves(game_doc["secondaryBoard"], game_doc["turn"])) or \
-            (s_outcome == "draw_stalemate" and m_outcome == "active" and not has_any_legal_moves(game_doc["mainBoard"], game_doc["turn"])):
+             (s_outcome == "draw_stalemate" and m_outcome == "active" and not has_any_legal_moves(game_doc["mainBoard"], game_doc["turn"])):
             if m_outcome == "draw_stalemate" and s_outcome == "active":
                 game_doc["secondary_board_outcome"] = "draw_stalemate"
                 s_outcome = "draw_stalemate"
@@ -1449,7 +1667,11 @@ def on_move(data):
         game_doc["status"] = f"Game over. Winner: {game_doc['winner']}."
         if game_doc["winner"] == "Draw":
             game_doc["status"] = "Game over. Draw."
-    games_collection.update_one({"room": room}, {"$set": game_doc})
+    
+    # Create a copy of game_doc without the _id field for the update
+    update_doc = {k: v for k, v in game_doc.items() if k != '_id'}
+    # Use the game's _id for the update
+    games_collection.update_one({"_id": game_doc["_id"]}, {"$set": update_doc})
     socketio.emit("game_update", serialize_game_state(game_doc), room=room)
 
 # WebSocket: Handle finishing game
@@ -1495,27 +1717,35 @@ def on_finish_game(data):
 def cleanup_stale_rooms():
     """Clean up rooms that have been empty for too long"""
     try:
-        # On startup, clear all active game rooms (but not completed game history)
+        # On startup, clear all *multi-player* active rooms
         if not hasattr(cleanup_stale_rooms, 'initialized'):
             result = games_collection.delete_many({
-                "status": {"$ne": "completed"}  # Only delete non-completed games
+                "status": "ongoing",
+                "room": {"$not": {"$regex": f"^{LOCAL_ROOM_PREFIX}"}}
             })
             if result.deleted_count > 0:
-                logger.info(f"Cleared all {result.deleted_count} active rooms on startup")
+                logger.info(f"Cleared all {result.deleted_count} active multi-player rooms on startup")
             cleanup_stale_rooms.initialized = True
             return
 
-        # Regular cleanup: find rooms with no players or only one player that haven't been updated recently
-        stale_time = datetime.datetime.utcnow() - datetime.timedelta(minutes=5)  # Reduced from 1 hour to 5 minutes
+        # Regular cleanup: find rooms with no players, game_over games, or stale single-player rooms
+        stale_time = datetime.datetime.utcnow() - datetime.timedelta(minutes=1)
         result = games_collection.delete_many({
-            "status": {"$ne": "completed"},  # Only delete non-completed games
+            "status": "ongoing",
+            "room": {"$not": {"$regex": f"^{LOCAL_ROOM_PREFIX}"}},   # Skip local games
             "$or": [
-                {"players": []},  # Empty rooms
-                {"players.1": {"$exists": False}, "createdAt": {"$lt": stale_time}}  # Single player rooms older than 5 minutes
+                {"game_over": True},  # Delete games that are over
+                {"players": {"$exists": False}},  # No players field
+                {"players": []},  # Empty players array
+                {"players": None},  # Null players
+                {"players.0": {"$exists": False}},  # No first player
+                {"players.1": {"$exists": False}, "createdAt": {"$lt": stale_time}},  # Stale single-player rooms
+                {"socket_ids": {"$exists": False}},  # No socket IDs
+                {"socket_ids": {}}  # Empty socket IDs
             ]
         })
         if result.deleted_count > 0:
-            logger.info(f"Cleaned up {result.deleted_count} stale rooms")
+            logger.info(f"Cleaned up {result.deleted_count} stale multi-player rooms")
     except Exception as e:
         logger.error(f"Error cleaning up stale rooms: {str(e)}")
 
@@ -1525,6 +1755,6 @@ if __name__ == "__main__":
     cleanup_stale_rooms()
     # Set up periodic cleanup
     scheduler = BackgroundScheduler()
-    scheduler.add_job(cleanup_stale_rooms, 'interval', minutes=1)  # Run cleanup every minute
+    scheduler.add_job(cleanup_stale_rooms, 'interval', seconds=30)  # Run cleanup every 30 seconds
     scheduler.start()
     socketio.run(app, host="0.0.0.0", port=5001)

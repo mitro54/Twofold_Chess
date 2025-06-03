@@ -58,6 +58,10 @@ export default function MultiplayerSetup() {
       if (reason === "io server disconnect") {
         alert("Disconnected from server. Please refresh the page.");
       }
+      // If we're in a game, emit player_disconnected to notify the other player
+      if (gameStarted && room) {
+        newSocket.emit("leave_room", { room, username });
+      }
     });
 
     newSocket.on("lobby_list", (lobbyList: Lobby[]) => {
@@ -92,7 +96,7 @@ export default function MultiplayerSetup() {
     newSocket.on("game_start", (data: { color: "White" | "Black"; username: string }) => {
       console.log("Game started:", data);
       if (data.username === username) {
-      setPlayerColor(data.color);
+        setPlayerColor(data.color);
       }
       setIsWaiting(false);
       setGameStarted(true);
@@ -113,6 +117,12 @@ export default function MultiplayerSetup() {
         newSocket.disconnect();
         setSocket(null);
       }
+    });
+
+    newSocket.on("player_disconnected", () => {
+      // Let Gameboard show its "opponent disconnected" modal and wait for
+      // the user to click "Return to Multiplayer".  Nothing to do here.
+      console.log("Other player disconnected – waiting for user action.");
     });
 
     setSocket(newSocket);
@@ -290,6 +300,7 @@ export default function MultiplayerSetup() {
             placeholder="Enter room code (optional)"
             value={room}
             onChange={(e) => setRoom(e.target.value)}
+            autoFocus
             className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-purple-500/30 focus:border-purple-400/50 focus:outline-none transition-all duration-300"
           />
           <div className="flex items-center space-x-2">
