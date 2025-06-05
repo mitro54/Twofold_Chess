@@ -26,7 +26,6 @@ export function getPieceInfo(piece: Piece): PieceInfo | null {
   const color = trimmed.charAt(0) === letter ? 'White' : 'Black';
 
   if (!['P', 'R', 'N', 'B', 'Q', 'K'].includes(letter)) {
-    // console.warn(\`Invalid piece type for: \${piece}\`); // Could enable for debugging
     return null;
   }
 
@@ -402,7 +401,6 @@ function isKingInCheck(board: Board, kingColor: 'White' | 'Black'): boolean {
 
   if (kingRow === -1) {
     // This should ideally not happen in a valid game state
-    // console.error(`King of color ${kingColor} not found on the board.`);
     return false; // Or throw an error, depending on desired strictness
   }
 

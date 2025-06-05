@@ -15,7 +15,7 @@ export default function LocalGame() {
     setLocalRoomId(newRoomId);
 
     // Initialize socket connection
-    const newSocket = io(environment.apiUrl, {
+    const newSocket = io(environment.socketUrl, {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 5,

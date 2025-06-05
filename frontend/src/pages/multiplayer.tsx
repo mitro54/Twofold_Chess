@@ -17,6 +17,7 @@ export default function MultiplayerSetup() {
   /* every tab gets an internal handle – never shown in the UI */
   const [username] = useState(() => uuidv4().slice(0, 8));
   const [room, setRoom] = useState("");
+  const [roomError, setRoomError] = useState("");
   const [gameStarted, setGameStarted] = useState(false);
   const [showLobbies, setShowLobbies] = useState(false);
   const [lobbies, setLobbies] = useState<Lobby[]>([]);
@@ -25,6 +26,26 @@ export default function MultiplayerSetup() {
   const [isWaiting, setIsWaiting] = useState(false);
   const [playerColor, setPlayerColor] = useState<"White" | "Black" | null>(null);
 
+  const validateRoomCode = (code: string): boolean => {
+    if (!code) return true; // Empty is valid (will generate random)
+    if (code.length > 30) {
+      setRoomError("Room code must be 30 characters or less");
+      return false;
+    }
+    if (!/^[a-zA-Z0-9]+$/.test(code)) {
+      setRoomError("Room code can only contain letters and numbers");
+      return false;
+    }
+    setRoomError("");
+    return true;
+  };
+
+  const handleRoomChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newRoom = e.target.value;
+    setRoom(newRoom);
+    validateRoomCode(newRoom);
+  };
+
   // Function to initialize socket connection
   const initializeSocket = () => {
     if (socket) {
@@ -32,8 +53,8 @@ export default function MultiplayerSetup() {
       socket.disconnect();
     }
 
-    console.log("Initializing new socket connection at:", environment.apiUrl);
-    const newSocket = io(environment.apiUrl, {
+    console.log("Initializing new socket connection at:", environment.socketUrl);
+    const newSocket = io(environment.socketUrl, {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 5,
@@ -186,6 +207,11 @@ export default function MultiplayerSetup() {
   }, [socket, room]);
 
   const handleStartGame = () => {
+    // Validate room code if provided
+    if (room && !validateRoomCode(room)) {
+      return;
+    }
+
     // Initialize socket first
     const gameSocket = initializeSocket();
     
@@ -295,14 +321,21 @@ export default function MultiplayerSetup() {
     <PageLayout title="Play with a Friend">
       <div className="flex flex-col space-y-6 w-full max-w-md mx-auto">
         <div className="flex flex-col space-y-4">
-          <input
-            type="text"
-            placeholder="Enter room code (optional)"
-            value={room}
-            onChange={(e) => setRoom(e.target.value)}
-            autoFocus
-            className="px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-purple-500/30 focus:border-purple-400/50 focus:outline-none transition-all duration-300"
-          />
+          <div className="flex flex-col space-y-2">
+            <input
+              type="text"
+              placeholder="Enter room code (optional)"
+              value={room}
+              onChange={handleRoomChange}
+              autoFocus
+              className={`px-6 py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border ${
+                roomError ? 'border-red-500/50' : 'border-purple-500/30'
+              } focus:border-purple-400/50 focus:outline-none transition-all duration-300`}
+            />
+            {roomError && (
+              <p className="text-red-500 text-sm">{roomError}</p>
+            )}
+          </div>
           <div className="flex items-center space-x-2">
             <input
               type="checkbox"

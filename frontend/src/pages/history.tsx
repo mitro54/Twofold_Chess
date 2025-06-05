@@ -58,7 +58,7 @@ const HistoryPage: React.FC = () => {
   useEffect(() => {
     const fetchGames = async () => {
       try {
-        const response = await fetch(`${environment.apiUrl}/api/games`);
+        const response = await fetch(`${environment.apiUrl}/games`);
         const data = await response.json();
         setGames(data);
         setFilteredGames(data);

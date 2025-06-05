@@ -4,7 +4,7 @@ services:
   backend:
     build: ./backend
     ports:
-      - "0.0.0.0:5001:5001"
+      - "0.0.0.0:8080:8080"
     environment:
       - MONGO_URI=${MONGO_URI}
       - FLASK_ENV=${FLASK_ENV}
@@ -16,7 +16,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "${BACKEND_URL}/api/health"]
+      test: ["CMD", "curl", "-f", "http://backend:8080/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -49,17 +49,45 @@ services:
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
       - NEXTAUTH_URL=${NEXTAUTH_URL}
+      - NEXTAUTH_URL_INTERNAL=http://frontend:3000
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - BACKEND_URL=http://backend:8080
+      - TRUST_HOST=true
     depends_on:
       backend:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-fsSL", "${BACKEND_URL}/api/health"]
+      test: ["CMD", "curl", "-fsSL", "http://backend:8080/api/health"]
       start_period: 10s
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - chess_network
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    depends_on:
+      - frontend
+      - backend
+    restart: unless-stopped
+    networks:
+      - chess_network
+
+  certbot:
+    image: certbot/certbot
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
     networks:
       - chess_network
 

@@ -1,8 +1,9 @@
 const environment = {
-  apiUrl: process.env.NEXT_PUBLIC_API_URL || 'http://192.168.100.135:5001',
+  apiUrl: process.env.NEXT_PUBLIC_API_URL || 'https://twofoldchess.com/api',
+  socketUrl: process.env.NEXT_PUBLIC_SOCKET_URL || 'https://twofoldchess.com',
   isProduction: process.env.NODE_ENV === 'production',
   auth: {
-    url: process.env.NEXTAUTH_URL || 'http://192.168.100.135:3000',
+    url: process.env.NEXTAUTH_URL || 'https://twofoldchess.com',
   },
 };
 

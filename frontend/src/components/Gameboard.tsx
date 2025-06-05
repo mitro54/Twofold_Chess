@@ -2,7 +2,6 @@
 // @ts-nocheck
 import React, { useState, useEffect, useRef } from "react";
 import { Socket } from "socket.io-client";
-import environment from "../config/environment";
 import {
   getValidMoves,
   getPieceInfo,
@@ -136,7 +135,6 @@ const Gameboard: React.FC<GameboardProps> = ({
   useState<{ White:{K:boolean;Q:boolean}; Black:{K:boolean;Q:boolean} }|
            null>(null);
 
-  const [showDebugMenu, setShowDebugMenu] = useState(false);
   const [lastTapTime, setLastTapTime] = useState<number>(0);
   const [lastTapPosition, setLastTapPosition] = useState<{ x: number; y: number } | null>(null);
   const DOUBLE_TAP_DELAY = 300; // milliseconds
@@ -172,18 +170,9 @@ const Gameboard: React.FC<GameboardProps> = ({
   
     // king must be on e-file of its home rank
     if (kingRow !== homeRank || kingCol !== 4) {
-      console.log(`[CASTLING DEBUG] King not on home square: row=${kingRow}, col=${kingCol}, expected row=${homeRank}, col=4`);
       return opts;
     }
   
-    // Print all relevant info for kingside
-    console.log('[CASTLING DEBUG] Checking kingside:', {
-      rightsK: rights.K,
-      rook: board[homeRank][7],
-      rookInfo: getPieceInfo(board[homeRank][7]),
-      between5: board[homeRank][5],
-      between6: board[homeRank][6],
-    });
     // -------- kingside --------
     if (
       rights.K &&
@@ -194,15 +183,6 @@ const Gameboard: React.FC<GameboardProps> = ({
       opts.push({ pos: { row: homeRank, col: 7 }, type: 'kingside' });
     }
   
-    // Print all relevant info for queenside
-    console.log('[CASTLING DEBUG] Checking queenside:', {
-      rightsQ: rights.Q,
-      rook: board[homeRank][0],
-      rookInfo: getPieceInfo(board[homeRank][0]),
-      between1: board[homeRank][1],
-      between2: board[homeRank][2],
-      between3: board[homeRank][3],
-    });
     // -------- queenside -------
     if (
       rights.Q &&
@@ -213,7 +193,6 @@ const Gameboard: React.FC<GameboardProps> = ({
       opts.push({ pos: { row: homeRank, col: 0 }, type: 'queenside' });
     }
   
-    console.log(`[CASTLING DEBUG] getCastlingOptions for ${player} at (${kingRow},${kingCol}) rights=`, rights, 'opts=', opts);
     return opts;
   };
   
@@ -223,9 +202,6 @@ const Gameboard: React.FC<GameboardProps> = ({
     if (activeBoard !== serverActiveBoardPhase) {
       // Only sync if there's no pending board swap and it's not a manual switch
       if (!boardSwapTimeoutRef.current && !isManualBoardSwitch) {
-        console.log(
-          `Syncing active board from ${activeBoard} to ${serverActiveBoardPhase}`
-        );
       setActiveBoard(serverActiveBoardPhase);
         setSelectedPieceSquare(null);
         setPossibleMoves([]);
@@ -236,7 +212,6 @@ const Gameboard: React.FC<GameboardProps> = ({
   useEffect(() => {
     if (socket) {
       socket.on("game_reset", (data: GameStateData) => {
-        console.log("FRONTEND: 'game_reset' event received. Data:", data ? JSON.parse(JSON.stringify(data)) : 'No data');
         setMainBoard(data.mainBoard);
         setSecondaryBoard(data.secondaryBoard);
         setTurn(data.turn);
@@ -288,7 +263,6 @@ const Gameboard: React.FC<GameboardProps> = ({
 
       // Reset the game once when a player first joins to ensure correct state
       if (socket && roomFromProps) {
-        console.log("Resetting game on first join to ensure correct state");
         socket.emit("reset", { room: roomFromProps });
       }
     }
@@ -299,22 +273,11 @@ const Gameboard: React.FC<GameboardProps> = ({
     if (!socket) return;
 
     const handleGameState = (data: GameStateData) => {
-      console.log("Game state update received:", JSON.stringify(data, null, 2));
       if (data && data.mainBoard && data.secondaryBoard) {
         // Force React to recognize the state change by creating new arrays
         const newMainBoard = data.mainBoard.map(row => [...row]);
         const newSecondaryBoard = data.secondaryBoard.map(row => [...row]);
         
-        console.log("Updating boards:", {
-          mainBoard: newMainBoard,
-          secondaryBoard: newSecondaryBoard,
-          turn: data.turn,
-          phase: data.active_board_phase,
-          isManualSwitch: isManualBoardSwitch,
-          isPlayerBlack,
-          hasInitializedBoard
-        });
-
         // If this is the first game state update after joining, ensure correct orientation
         if (!hasInitializedBoard && playerColor) {
           const isBlack = playerColor === "Black";
@@ -386,7 +349,7 @@ const Gameboard: React.FC<GameboardProps> = ({
         clearTimeout(manualSwitchTimeoutRef.current);
       }
     };
-  }, [socket, roomFromProps, isManualBoardSwitch, isPlayerBlack, hasInitializedBoard, mainBoardOutcome, secondaryBoardOutcome]);
+  }, [socket, roomFromProps, isManualBoardSwitch, isPlayerBlack, hasInitializedBoard, mainBoardOutcome, secondaryBoardOutcome, activeBoard, playerColor]);
 
   /** show server-side move errors */
   useEffect(() => {
@@ -478,45 +441,11 @@ const Gameboard: React.FC<GameboardProps> = ({
   }, [socket, respondingToCheckBoard, mainBoardOutcome, secondaryBoardOutcome]);
 
   const resetBoard = async () => {
-    console.log("FRONTEND: Resetting board for room:", roomFromProps);
     if (socket) {
       socket.emit("reset", { room: roomFromProps });
-    } else {
-      console.warn("FRONTEND: Reset called but socket is null.");
     }
     setShowCheckmateModal(false);
     setGameEndMessage("");
-  };
-
-  const setupDebugScenario = async (scenarioName: string) => {
-    if (!socket || !roomFromProps) {
-      console.error("FRONTEND: Cannot setup debug scenario, socket or room is missing.");
-      alert("Socket or room not available. Cannot setup debug scenario.");
-      return;
-    }
-    console.log(`FRONTEND: Requesting debug scenario: ${scenarioName} for room: ${roomFromProps}`);
-    try {
-      const response = await fetch(`${environment.apiUrl}/api/debug/setup/${scenarioName}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ room: roomFromProps }),
-        }
-      );
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error("FRONTEND: Error setting up debug scenario:", errorData.message);
-        alert(`Error setting up scenario: ${errorData.message}`);
-      } else {
-        console.log(`FRONTEND: Debug scenario ${scenarioName} request successful.`);
-        // Backend will emit game_update, no need to manually set state here
-      }
-    } catch (error) {
-      console.error("FRONTEND: Network or other error setting up debug scenario:", error);
-      alert("Failed to request debug scenario. Check console.");
-    }
   };
 
 const handleSquareClick = (
@@ -539,21 +468,6 @@ const handleSquareClick = (
   const boardOutcome =
     boardClicked === "main" ? mainBoardOutcome : secondaryBoardOutcome;
   
-  // Add debug logging
-  console.log("Move attempt:", {
-    boardOutcome,
-    socket: !!socket,
-    gameFinished,
-    boardClicked,
-    activeBoard,
-    serverActiveBoardPhase,
-    turn,
-    myColor,
-    isPlayerBlack,
-    currentMainBoard: mainBoard,
-    currentSecondaryBoard: secondaryBoard
-  });
-
   // Check if we're in multiplayer mode and it's not the player's turn
   const isMultiplayerMode = playerColor !== null;
   const isPlayerTurn = !isMultiplayerMode || turn === myColor;
@@ -566,21 +480,6 @@ const handleSquareClick = (
     boardClicked !== serverActiveBoardPhase ||
     !isPlayerTurn // Only check turn in multiplayer mode
   ) {
-    console.log("Move blocked:", {
-      boardOutcome,
-      socket: !!socket,
-      gameFinished,
-      boardClicked,
-      activeBoard,
-      serverActiveBoardPhase,
-      turn,
-      myColor,
-      isPlayerBlack,
-      reason: !isPlayerTurn ? "Not your turn" :
-              boardClicked !== activeBoard ? "Wrong active board" :
-              boardClicked !== serverActiveBoardPhase ? "Wrong server phase" :
-              "Other reason"
-    });
     return;
   }
 
@@ -588,10 +487,6 @@ const handleSquareClick = (
     serverActiveBoardPhase === "main" ? mainBoard : secondaryBoard;
   const pieceAtSquare: ChessPieceType = currentBoardState[row][col];
   const pieceInfo = getPieceInfo(pieceAtSquare);
-  console.log(`[DEBUG] Square clicked: row=${row}, col=${col}, board=${boardClicked}, pieceAtSquare=`, pieceAtSquare, ', getPieceInfo=', pieceInfo);
-  if (pieceInfo && pieceInfo.type === "King") {
-    console.log(`[DEBUG] King clicked at row=${row}, col=${col}, piece=`, pieceAtSquare, pieceInfo);
-  }
 
   /* ------------------------------------------------------------------ *
    *                 1) SECOND TAP –- try to make a move                *
@@ -752,11 +647,7 @@ const handleSquareClick = (
     setSelectedPieceSquare({ row, col });
     setPossibleMoves(finalMoves);
     setCastlingCandidate(newCandidate);
-    if (newCandidate) {
-      console.log('[CASTLING DEBUG] setCastlingCandidate:', newCandidate);
-    }
   } else {
-    // clicked empty or enemy square – clear
     setSelectedPieceSquare(null);
     setPossibleMoves([]);
     setCastlingCandidate(null);
@@ -892,7 +783,6 @@ const handleSquareClick = (
         setIsManualBoardSwitch(true);
         setActiveBoard(prev => {
           const nextBoard = prev === "main" ? "secondary" : "main";
-          console.log(`DOUBLE TAP: Toggling activeBoard from ${prev} to ${nextBoard}`);
           return nextBoard;
         });
         setSelectedPieceSquare(null);
@@ -997,7 +887,7 @@ const handleSquareClick = (
   }, [socket]);
 
   return (
-    <div className="flex flex-col items-center select-none">
+    <div className="relative w-full h-full flex flex-col items-center justify-center">
       <div className="flex flex-col items-center w-full max-w-[600px] px-4 mb-2">
         <h2 className="text-lg sm:text-xl font-medium text-white/90 mb-2">
           Room: <span className="text-white font-semibold">{roomFromProps}</span>
@@ -1153,77 +1043,7 @@ const handleSquareClick = (
             </span>
           </button>
         </div>
-        <button
-          onClick={() => setShowDebugMenu(!showDebugMenu)}
-          className="px-4 py-2 sm:px-6 sm:py-3 bg-gray-900/80 backdrop-blur-sm text-white rounded-lg border border-purple-500/30 hover:border-purple-400/50 transition-all duration-300 transform hover:scale-105 text-sm sm:text-base font-semibold shadow-[0_0_15px_rgba(168,85,247,0.3)] hover:shadow-[0_0_20px_rgba(168,85,247,0.5)] flex items-center justify-center min-w-[140px] sm:min-w-[180px] group"
-        >
-          <span className="bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent group-hover:from-purple-300 group-hover:to-pink-300 transition-colors">
-            Debug Menu
-          </span>
-        </button>
       </div>
-
-      {/* Debug Scenarios Modal */}
-      {showDebugMenu && (
-        <div 
-          className="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex items-center justify-center z-50"
-          onClick={() => setShowDebugMenu(false)}
-        >
-          <div 
-            className="bg-gray-800 p-6 rounded-lg shadow-lg max-w-2xl w-full mx-4"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex justify-between items-center mb-4">
-              <h4 className="text-xl font-semibold text-red-400">Debug Scenarios</h4>
-              <button
-                onClick={() => setShowDebugMenu(false)}
-                className="text-gray-400 hover:text-gray-200"
-              >
-                ✕
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => { setupDebugScenario('main_white_checkmates_black'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-red-900 text-red-200 text-xs rounded hover:bg-red-800">Main: W mates B</button>
-              <button onClick={() => { setupDebugScenario('secondary_black_checkmates_white'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-red-900 text-red-200 text-xs rounded hover:bg-red-800">Sec: B mates W</button>
-              <button onClick={() => { setupDebugScenario('main_stalemate_black_to_move'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-yellow-900 text-yellow-200 text-xs rounded hover:bg-yellow-800">Main: Stalemate (B)</button>
-              <button onClick={() => { setupDebugScenario('secondary_stalemate_white_to_move'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-yellow-900 text-yellow-200 text-xs rounded hover:bg-yellow-800">Sec: Stalemate (W)</button>
-              <button onClick={() => { setupDebugScenario('main_black_in_check_black_to_move'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-orange-900 text-orange-200 text-xs rounded hover:bg-orange-800">Main: B in Check</button>
-              <button onClick={() => { setupDebugScenario('secondary_white_in_check_white_to_move'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-orange-900 text-orange-200 text-xs rounded hover:bg-orange-800">Sec: W in Check</button>
-              <button onClick={() => { setupDebugScenario('main_white_causes_check_setup'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-purple-900 text-purple-200 text-xs rounded hover:bg-purple-800">Main: W causes Check Setup</button>
-              <button onClick={() => { setupDebugScenario('promotion_white_main'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-green-900 text-green-200 text-xs rounded hover:bg-green-800">Promotion: White (Main)</button>
-              <button onClick={() => { setupDebugScenario('promotion_black_secondary'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-green-900 text-green-200 text-xs rounded hover:bg-green-800">Promotion: Black (Secondary)</button>
-              <button onClick={() => { setupDebugScenario('castling_white_kingside_main'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-blue-900 text-blue-200 text-xs rounded hover:bg-blue-800">Castling: White Kingside (Main)</button>
-              <button onClick={() => { setupDebugScenario('castling_black_queenside_secondary'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-blue-900 text-blue-200 text-xs rounded hover:bg-blue-800">Castling: Black Queenside (Secondary)</button>
-              <button onClick={() => { setupDebugScenario('enpassant_white_main'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-pink-900 text-pink-200 text-xs rounded hover:bg-pink-800">En Passant: White (Main)</button>
-              <button onClick={() => { setupDebugScenario('enpassant_black_secondary'); setShowDebugMenu(false); }} className="px-3 py-1.5 bg-pink-900 text-pink-200 text-xs rounded hover:bg-pink-800">En Passant: Black (Secondary)</button>
-            </div>
-            {/* --- DEBUG: Force Kingside Castling for White on Main Board --- */}
-            <div className="mt-4 flex flex-col items-center">
-              <button
-                onClick={() => {
-                  if (!socket) { alert('Socket not connected'); return; }
-                  socket.emit("move", {
-                    room: roomFromProps,
-                    boardType: "main",
-                    board: mainBoard,
-                    move: {
-                      from: [7, 4], // White king's starting position
-                      to: [7, 6],   // White king's kingside castling destination
-                      piece: mainBoard[7][4],
-                      captured: null,
-                      castle: "kingside"
-                    }
-                  });
-                  setShowDebugMenu(false);
-                }}
-                className="px-4 py-2 bg-orange-900 text-orange-200 font-bold rounded hover:bg-orange-800 mt-2"
-              >
-                TEST: Force White Kingside Castle (Main Board)
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {showPromotionModal && (
         <div className="fixed top-0 left-0 w-full h-full bg-black bg-opacity-50 flex items-center justify-center z-[9999]">
@@ -1248,39 +1068,6 @@ const handleSquareClick = (
               Cancel
             </button>
           </div>
-        </div>
-      )}
-
-      {/* Castling Action Buttons (appear when king is selected and castling is available) */}
-      {castlingCandidate && castlingCandidate.rooks.length > 0 && (
-        <div className="flex gap-4 mb-2">
-          {castlingCandidate.rooks.map((rookOpt) => (
-            <button
-              key={rookOpt.type}
-              onClick={() => {
-                const { kingPos } = castlingCandidate;
-                if (!socket) { alert('Socket not connected'); return; }
-                socket.emit("move", {
-                  room: roomFromProps,
-                  boardType: serverActiveBoardPhase,
-                  board: serverActiveBoardPhase === "main" ? mainBoard : secondaryBoard,
-                  move: {
-                    from: [kingPos.row, kingPos.col],
-                    to: [kingPos.row, rookOpt.type === 'kingside' ? 6 : 2],
-                    piece: (serverActiveBoardPhase === "main" ? mainBoard : secondaryBoard)[kingPos.row][kingPos.col],
-                    captured: null,
-                    castle: rookOpt.type
-                  }
-                });
-                setCastlingCandidate(null);
-                setSelectedPieceSquare(null);
-                setPossibleMoves([]);
-              }}
-              className={`px-4 py-2 rounded font-bold text-white ${rookOpt.type === 'kingside' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-purple-600 hover:bg-purple-700'}`}
-            >
-              Castle {rookOpt.type.charAt(0).toUpperCase() + rookOpt.type.slice(1)}
-            </button>
-          ))}
         </div>
       )}
 

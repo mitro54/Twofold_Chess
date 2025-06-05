@@ -128,3 +128,13 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+*.pem
+*.key
+*.crt
+*.csr
+*.csr
+meta.json*
+private_key.json*
+regr.json*
+twofoldchess.com.conf*
+nginx.conf*

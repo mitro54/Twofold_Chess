@@ -14,4 +14,4 @@ COPY . .
 EXPOSE 5001
 ENV FLASK_APP=app.py
 ENV FLASK_ENV=production
-CMD ["gunicorn", "--worker-class", "eventlet", "--workers", "1", "--bind", "0.0.0.0:5001", "app:app"]
+CMD ["gunicorn", "--worker-class", "eventlet", "--workers", "1", "--bind", "0.0.0.0:8080", "app:app"]

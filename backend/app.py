@@ -18,6 +18,7 @@ from original_helpers import (
 )
 import chess
 import logging
+from logging.handlers import RotatingFileHandler
 import random
 import datetime
 import time
@@ -26,33 +27,53 @@ from apscheduler.schedulers.background import BackgroundScheduler
 ######################### CONSTANTS #########################
 
 LOCAL_ROOM_PREFIX = "local_"  # Prefix for local game room IDs
+# Grace period for disconnection
+GRACE_SECONDS = int(os.getenv("DISC_GRACE_SEC", 90))
 
 ######################### APPLICATION INITIALIZATION #########################
 
 # Get CORS origins from environment variable
-CORS_ORIGINS = os.getenv('CORS_ORIGINS', 'http://localhost:3000').split(',')
+CORS_ORIGINS = os.getenv('CORS_ORIGINS', 'https://twofoldchess.com').split(',')
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": CORS_ORIGINS}})
-app.config["SECRET_KEY"] = os.getenv('FLASK_SECRET_KEY', 'lalalalala')
+app.config["SECRET_KEY"] = os.getenv('FLASK_SECRET_KEY')
+
+# Create logs directory if it doesn't exist
+if not os.path.exists('logs'):
+    os.makedirs('logs')
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(
+    level=logging.INFO,  # Change from DEBUG to INFO for production
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        RotatingFileHandler(
+            'logs/app.log',
+            maxBytes=10485760,  # 10MB
+            backupCount=5
+        ),
+        logging.StreamHandler()  # Keep console output but with INFO level
+    ]
+)
+
 logger = logging.getLogger(__name__)
 
 socketio = SocketIO(
     app,
     cors_allowed_origins=CORS_ORIGINS,
     async_mode='eventlet',
-    ping_timeout=60,
-    ping_interval=25,
-    logger=True,
-    engineio_logger=True
+    ping_timeout=120,
+    ping_interval=30,
+    logger=False,
+    engineio_logger=False  # Disable engine.io logging in production
 )
 
 ######################### MONGODB SETUP #########################
 
-mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/chess")
+mongo_uri = os.getenv("MONGO_URI")
+if not mongo_uri:
+    raise ValueError("MONGO_URI environment variable is required")
 client = MongoClient(mongo_uri)
 db = client.chess
 games_collection = db.games
@@ -65,82 +86,29 @@ def handle_connect():
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    logger.info(f"Client disconnected: {request.sid}")
+    sid = request.sid
+    logger.info(f"Client disconnected: {sid}")
     
-    try:
-        # Find all games where this socket ID is used
-        games = list(games_collection.find(
-            {"socket_ids": {"$exists": True}}
-        ))
-        
-        for game in games:
-            room = game["room"]
-            disconnected_username = None
-            
-            # Find which username owns this socket ID
-            for username, socket_id in game.get("socket_ids", {}).items():
-                if socket_id == request.sid:
-                    disconnected_username = username
-                    break
-            
-            if disconnected_username:
-                logger.info(f"Player {disconnected_username} disconnected from room {room}")
-                
-                # Notify other players immediately
-                emit(
-                    "player_disconnected",
-                    {"message": f"Player {disconnected_username} disconnected"},
-                    room=room,
-                )
-                
-                # Update game state
-                game_state = games_collection.find_one({"_id": game["_id"]})
-                if game_state:
-                    # Remove the disconnected player
-                    if disconnected_username in game_state.get("players", []):
-                        game_state["players"].remove(disconnected_username)
-                    if disconnected_username in game_state.get("player_colors", {}):
-                        del game_state["player_colors"][disconnected_username]
-                    if disconnected_username in game_state.get("socket_ids", {}):
-                        del game_state["socket_ids"][disconnected_username]
-                    
-                    # If no players left, delete the game
-                    if not game_state["players"]:
-                        logger.info(f"Deleting empty room {room}")
-                        games_collection.delete_one({"_id": game_state["_id"]})
-                        socketio.emit("room_deleted", {"room": room})
-                    else:
-                        # Mark game as over for remaining player
-                        game_state["game_over"] = True
-                        game_state["status"] = "Game aborted - opponent disconnected"
-                        games_collection.update_one(
-                            {"_id": game_state["_id"]},
-                            {"$set": game_state}
-                        )
-                        # Push the frozen state to remaining player
-                        socketio.emit(
-                            "game_update",
-                            serialize_game_state(game_state),
-                            room=room
-                        )
-                        logger.info(f"Room {room}: flagged game_over after {disconnected_username} disconnected")
-                
-                # Broadcast updated lobby list
-                lobbies = list(games_collection.find(
-                    {"is_private": False, "players.1": {"$exists": False}, "status": "ongoing", "game_over": {"$ne": True}},
-                    {"room": 1, "host": 1, "is_private": 1, "createdAt": 1, "_id": 0}
-                ))
-                for lobby in lobbies:
-                    if isinstance(lobby.get("createdAt"), datetime.datetime):
-                        lobby["createdAt"] = int(lobby["createdAt"].timestamp() * 1000)
-                socketio.emit("lobby_list", lobbies)
-                
-                # Leave the socket room
-                leave_room(room)
-                break
-    
-    except Exception as e:
-        logger.error(f"Error handling disconnect: {str(e)}")
+    game = games_collection.find_one({"socket_ids": {"$in": [sid]}})
+    if not game:
+        return
+
+    player = next((u for u, s in game["socket_ids"].items() if s == sid), None)
+    if not player:
+        return
+
+    room = game["room"]
+    emit("player_disconnected", {"username": player}, room=room)
+
+    games_collection.update_one(
+        {"_id": game["_id"]},
+        {
+            "$unset": {f"socket_ids.{player}": ""},
+            "$set":   {f"disconnected_at.{player}": datetime.datetime.utcnow()}
+        }
+    )
+
+    leave_room(room)
 
 @socketio.on('error')
 def handle_error(error):
@@ -290,11 +258,32 @@ def _check_threefold_repetition(fen_history):
     return count >= 3
 
 def serialize_game_state(game_state):
-    if "_id" in game_state:
-        game_state["_id"] = str(game_state["_id"])
-    if isinstance(game_state.get("createdAt"), datetime.datetime):
-        game_state["createdAt"] = int(game_state["createdAt"].timestamp() * 1000)
-    return game_state
+    """
+    Converts Mongo document to JSON-serializable:
+        • ObjectId  → str
+        • datetime  → epoch-ms (int)
+    Recursive – works with nested structures
+        (e.g. last_seen / disconnected_at).
+    """
+
+    def _coerce(obj):
+        # datetime → milliseconds
+        if isinstance(obj, datetime.datetime):
+            return int(obj.timestamp() * 1000)
+        # ObjectId → str
+        if isinstance(obj, ObjectId):
+            return str(obj)
+        # lists are processed element by element
+        if isinstance(obj, list):
+            return [_coerce(i) for i in obj]
+        # dictionaries are processed key by key
+        if isinstance(obj, dict):
+            return {k: _coerce(v) for k, v in obj.items()}
+        # basic types are returned as is
+        return obj
+
+    # Returns a copy; does not modify the original game_state object
+    return _coerce(game_state)
 
 ######################### ROUTES #########################
 
@@ -302,26 +291,15 @@ def serialize_game_state(game_state):
 @app.route("/api/games", methods=["GET"])
 def get_all_games():
     games = list(games_collection.find(
-        {"status": "completed"}, 
+        {"status": {"$in": ["completed", "draw"]}},
         {"_id": 0}
     ).sort("_id", -1))  # Sort by _id in descending order (newest first)
     return jsonify(games), 200
-
-# Route: Delete all games data, NOT FOR PRODUCTION
-@app.route("/api/delete_all_games", methods=["POST"])
-def delete_all_games():
-    result = games_collection.delete_many({})
-
-    if result.deleted_count > 0:
-        return jsonify({"message": f"{result.deleted_count} games deleted successfully"}), 200
-    else:
-        return jsonify({"message": "No games found to delete"}), 404
 
 # Route: Save game data
 @app.route("/api/games", methods=["POST"])
 def save_game():
     data = request.json
-    print(f"Received data: {data}")
     required_fields = {"room", "winner", "board", "moves"}
     missing_fields = required_fields - data.keys()
     if missing_fields:
@@ -425,30 +403,8 @@ def get_game_state():
             "en_passant_target": {"main": None, "secondary": None},
         }
         games_collection.insert_one({"room": room, **game_state})
-        print(f"New game state created for room {room}: {game_state}")
-    else:
-        if "active_board_phase" not in game_state:
-            print(f"Migrating existing game state for room {room} to include active_board_phase.")
-            # Ensure 'turn' also exists, defaulting to 'White' if not
-            current_turn = game_state.get("turn", "White")
-            games_collection.update_one(
-                {"_id": game_state["_id"]},
-                {"$set": {
-                    "active_board_phase": "main", 
-                    "turn": current_turn,
-                    "is_responding_to_check_on_board": None, # Ensure it's added on migration
-                    "castling_rights": {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}},
-                    "en_passant_target": {"main": None, "secondary": None}
-                }}
-            )
-            game_state["active_board_phase"] = "main"
-            game_state["turn"] = current_turn
-            game_state["is_responding_to_check_on_board"] = None
-            game_state["castling_rights"] = {"White": {"K": True, "Q": True}, "Black": {"K": True, "Q": True}}
-            game_state["en_passant_target"] = {"main": None, "secondary": None}
 
     if not game_state: # Should be extremely rare
-        print(f"CRITICAL: game_state for room {room} is None after create/find attempt.")
         return
 
     # Ensure the game_state sent to the client includes all necessary fields
@@ -461,401 +417,10 @@ def get_game_state():
     })
     if final_game_state_for_client: # Should always exist here
         emit("game_state", serialize_game_state(final_game_state_for_client), room=room)
-        print(f"Player {username} joined room {room}. Game state sent.")
     else:
         # This case should ideally not happen if insert_one or update_one in reset worked
         print(f"ERROR: Game state not found for room {room} after join/creation attempt.")
 
-######################### DEBUG SCENARIO SETUP ROUTES #########################
-
-DEBUG_SCENARIOS = {
-    "main_white_checkmates_black": {
-        "mainBoard_func": lambda: (
-            b := create_empty_board(),
-            b[0].__setitem__(7, "k"), # Black King h8
-            b[1].__setitem__(6, "Q"), # White Queen g7
-            b[7].__setitem__(0, "K"), # White King a1
-            b
-        )[-1],
-        "secondaryBoard_func": lambda: create_initial_board(),
-        "turn": "Black", # Game is over, but was Black's turn to be checkmated
-        "active_board_phase": "main",
-        "main_board_outcome": "white_wins",
-        "secondary_board_outcome": "active",
-        "game_over": True,
-        "winner": "White",
-        "status": "White wins by checkmate on main board."
-    },
-    "secondary_black_checkmates_white": {
-        "mainBoard_func": lambda: create_initial_board(),
-        "secondaryBoard_func": lambda: (
-            b := create_empty_board(),
-            b[7].__setitem__(7, "K"), # White King h1
-            b[6].__setitem__(6, "q"), # Black Queen g2
-            b[0].__setitem__(0, "k"), # Black King a8
-            b
-        )[-1],
-        "turn": "White",
-        "active_board_phase": "secondary",
-        "main_board_outcome": "active",
-        "secondary_board_outcome": "black_wins",
-        "game_over": True,
-        "winner": "Black",
-        "status": "Black wins by checkmate on secondary board."
-    },
-    "main_stalemate_black_to_move": {
-        "mainBoard_func": lambda: (
-            b := create_empty_board(),
-            b[0].__setitem__(0, "k"), # Black King a8
-            b[2].__setitem__(0, "K"), # White King a6 (b2[0] is row 2, col 0)
-                                     # White Queen at c7 to control b8, b7, c8. (b[1][2] = 'Q')
-            b[1].__setitem__(2, "Q"),
-            b
-        )[-1],
-        "secondaryBoard_func": lambda: create_initial_board(),
-        "turn": "Black",
-        "active_board_phase": "main",
-        "main_board_outcome": "active", # Will become stalemate after Black attempts to move
-        "secondary_board_outcome": "active",
-        "game_over": False,
-        "winner": None,
-        "status": "Setup for Stalemate on Main (Black to move)."
-    },
-    "secondary_stalemate_white_to_move": {
-        "mainBoard_func": lambda: create_initial_board(),
-        "secondaryBoard_func": lambda: (
-            b := create_empty_board(),
-            b[0].__setitem__(0, "K"), # White King a8
-            b[2].__setitem__(0, "k"), # Black King a6
-            b[1].__setitem__(2, "q"), # Black Queen c7
-            b
-        )[-1],
-        "turn": "White",
-        "active_board_phase": "secondary",
-        "main_board_outcome": "active",
-        "secondary_board_outcome": "active", # Will become stalemate
-        "game_over": False,
-        "winner": None,
-        "status": "Setup for Stalemate on Secondary (White to move)."
-    },
-    "main_black_in_check_black_to_move": {
-        "mainBoard_func": lambda: (
-            b := create_empty_board(),
-            b[0].__setitem__(0, "k"), # Black King a8
-            b[0].__setitem__(7, "R"), # White Rook h8 (checking a8)
-            b[7].__setitem__(4, "K"), # White King e1
-            b
-        )[-1],
-        "secondaryBoard_func": lambda: create_initial_board(),
-        "turn": "Black",
-        "active_board_phase": "main",
-        "main_board_outcome": "active",
-        "secondary_board_outcome": "active",
-        "game_over": False,
-        "winner": None,
-        "status": "Black in Check on Main (Black to move)."
-    },
-    "secondary_white_in_check_white_to_move": {
-        "mainBoard_func": lambda: create_initial_board(),
-        "secondaryBoard_func": lambda: (
-            b := create_empty_board(),
-            b[7].__setitem__(0, "K"), # White King a1
-            b[7].__setitem__(7, "r"), # Black Rook h1 (checking a1)
-            b[0].__setitem__(4, "k"), # Black King e8
-            b
-        )[-1],
-        "turn": "White",
-        "active_board_phase": "secondary",
-        "main_board_outcome": "active",
-        "secondary_board_outcome": "active",
-        "game_over": False,
-        "winner": None,
-        "status": "White in Check on Secondary (White to move)."
-    },
-    "main_white_causes_check_setup": {
-        "mainBoard_func": lambda: (
-            b := create_empty_board(),
-            b[1].__setitem__(0, "R"), # White Rook a7 (row 1, col 0)
-            b[7].__setitem__(4, "K"), # White King e1 (row 7, col 4)
-            b[0].__setitem__(2, "k"), # Black King c8 (row 0, col 2)
-            b
-        )[-1],
-        "secondaryBoard_func": lambda: create_initial_board(),
-        "turn": "White",
-        "active_board_phase": "main",
-        "main_board_outcome": "active",
-        "secondary_board_outcome": "active",
-        "game_over": False,
-        "winner": None,
-        "status": "Setup for White to cause check (move Rook from a7 to c7)."
-    },
-    "promotion_white_main": {
-        "mainBoard_func": lambda: (
-            b := create_empty_board(),
-            b[1].__setitem__(4, "P1"),  # White pawn on e7 (row 1, col 4)
-            b[7].__setitem__(4, "K"),   # White King on e1 (row 7, col 4)
-            b[0].__setitem__(0, "k"),   # Black King on a8 (row 0, col 0)
-            b
-        )[-1],
-        "secondaryBoard_func": lambda: create_empty_board(),
-        "turn": "White",
-        "active_board_phase": "main",
-        "main_board_outcome": "active",
-        "secondary_board_outcome": "active",
-        "game_over": False,
-        "winner": None,
-        "status": "White pawn ready to promote on main board."
-    },
-    "promotion_black_secondary": {
-        "mainBoard_func": lambda: create_empty_board(),
-        "secondaryBoard_func": lambda: (
-            b := create_empty_board(),
-            b[6].__setitem__(3, "p1"),  # Black pawn on d2 (row 6, col 3)
-            b[0].__setitem__(7, "k"),   # Black King on h8 (row 0, col 7)
-            b[7].__setitem__(7, "K"),   # White King on h1 (row 7, col 7)
-            b
-        )[-1],
-        "turn": "Black",
-        "active_board_phase": "secondary",
-        "main_board_outcome": "active",
-        "secondary_board_outcome": "active",
-        "game_over": False,
-        "winner": None,
-        "status": "Black pawn ready to promote on secondary board."
-    },
-    "castling_white_kingside_main": {
-        "mainBoard_func": lambda: (
-            b := create_empty_board(),
-            b[7].__setitem__(4, "K"),   # White King on e1
-            b[7].__setitem__(7, "R"),   # White Rook on h1
-            b[0].__setitem__(0, "k"),   # Black King on a8
-            b
-        )[-1],
-        "secondaryBoard_func": lambda: create_empty_board(),
-        "turn": "White",
-        "active_board_phase": "main",
-        "main_board_outcome": "active",
-        "secondary_board_outcome": "active",
-        "game_over": False,
-        "winner": None,
-        "status": "White can castle kingside on main board."
-    },
-    "castling_black_queenside_secondary": {
-        "mainBoard_func": lambda: create_empty_board(),
-        "secondaryBoard_func": lambda: (
-            b := create_empty_board(),
-            b[0].__setitem__(4, "k"),   # Black King on e8
-            b[0].__setitem__(0, "r"),   # Black Rook on a8
-            b[7].__setitem__(7, "K"),   # White King on h1
-            b
-        )[-1],
-        "turn": "Black",
-        "active_board_phase": "secondary",
-        "main_board_outcome": "active",
-        "secondary_board_outcome": "active",
-        "game_over": False,
-        "winner": None,
-        "status": "Black can castle queenside on secondary board."
-    },
-    "enpassant_white_main": {
-        "mainBoard_func": lambda: (
-            b := create_empty_board(),
-            b[6].__setitem__(4, "P1"),  # White pawn on e2 (row 6, col 4)
-            b[4].__setitem__(5, "p1"),  # Black pawn on f4 (row 4, col 5)
-            b[0].__setitem__(0, "k"),   # Black King on a8
-            b[7].__setitem__(4, "K"),   # White King on e1
-            b
-        )[-1],
-        "secondaryBoard_func": lambda: create_empty_board(),
-        "turn": "White",
-        "active_board_phase": "main",
-        "main_board_outcome": "active",
-        "secondary_board_outcome": "active",
-        "game_over": False,
-        "winner": None,
-        "status": "White can play e2-e4, then Black can en passant on main board."
-    },
-    "enpassant_black_secondary": {
-        "mainBoard_func": lambda: create_empty_board(),
-        "secondaryBoard_func": lambda: (
-            b := create_empty_board(),
-            b[1].__setitem__(3, "p1"),  # Black pawn on d7 (row 1, col 3)
-            b[3].__setitem__(2, "P1"),  # White pawn on c5 (row 3, col 2)
-            b[0].__setitem__(7, "k"),   # Black King on h8
-            b[7].__setitem__(0, "K"),   # White King on a1
-            b
-        )[-1],
-        "turn": "Black",
-        "active_board_phase": "secondary",
-        "main_board_outcome": "active",
-        "secondary_board_outcome": "active",
-        "game_over": False,
-        "winner": None,
-        "status": "Black can play d7-d5, then White can en passant on secondary board."
-    },
-}
-
-@app.route('/api/debug/setup/<scenario_name>', methods=['POST'])
-def setup_debug_scenario(scenario_name):
-    data = request.get_json()
-    room = data.get("room")
-
-    if not room:
-        return jsonify({"message": "Room ID is required."}), 400
-
-    scenario_config = DEBUG_SCENARIOS.get(scenario_name)
-    if not scenario_config:
-        return jsonify({"message": f"Unknown scenario: {scenario_name}"}), 404
-
-    game = games_collection.find_one({"room": room})
-    if not game:
-        # Option: Create a default game state if not found, then apply scenario
-        # For now, require game to exist (created on join)
-        return jsonify({"message": "Game not found. Ensure you've joined the room."}), 404
-
-    # Initialize game_doc with current game state, then selectively override with scenario
-    game_doc = dict(game) 
-
-    # Prepare the new state based on scenario config
-    game_doc["mainBoard"] = scenario_config["mainBoard_func"]()
-    game_doc["secondaryBoard"] = scenario_config["secondaryBoard_func"]()
-    game_doc["turn"] = scenario_config["turn"]
-    game_doc["active_board_phase"] = scenario_config["active_board_phase"]
-    game_doc["main_board_outcome"] = scenario_config["main_board_outcome"]
-    game_doc["secondary_board_outcome"] = scenario_config["secondary_board_outcome"]
-    game_doc["game_over"] = scenario_config["game_over"]
-    game_doc["winner"] = scenario_config["winner"]
-    game_doc["status"] = scenario_config.get("status", "Debug scenario activated.")
-    game_doc["moves"] = game_doc.get("moves", []) # Keep existing or use scenario's if provided
-    game_doc["is_responding_to_check_on_board"] = scenario_config.get("is_responding_to_check_on_board", None)
-    game_doc["castling_rights"] = {
-        "White": {"K": True, "Q": True},
-        "Black": {"K": True, "Q": True}
-    }
-
-    # Set en passant target for en passant debug scenarios
-    if scenario_name == "enpassant_white_main":
-        game_doc["en_passant_target"] = [3, 5]  # e.g., f4 square (row 3, col 5)
-    elif scenario_name == "enpassant_black_secondary":
-        game_doc["en_passant_target"] = [4, 2]  # e.g., c5 square (row 4, col 2)
-
-    current_player_color = game_doc["turn"]
-    opponent_color = "Black" if current_player_color == "White" else "White"
-    board_type_just_set = game_doc["active_board_phase"] # The board active for the current player by scenario default
-    
-    # If a scenario sets up an immediate stalemate for the current player on their active board:
-    if "stalemate" in scenario_name: 
-        board_to_check_stalemate_key = "mainBoard" if board_type_just_set == "main" else "secondaryBoard"
-        board_outcome_to_set_key = "main_board_outcome" if board_type_just_set == "main" else "secondary_board_outcome"
-        
-        if game_doc[board_outcome_to_set_key] == "active" and is_stalemate(game_doc[board_to_check_stalemate_key], current_player_color):
-            game_doc[board_outcome_to_set_key] = "draw_stalemate"
-            game_doc["status"] = f"Immediate stalemate on {board_type_just_set} for {current_player_color} by debug setup."
-            # Now, because this board was just stalemated, we need to determine the next turn/phase
-            # This replicates part of the logic from on_move's turn progression
-
-            next_player_candidate = current_player_color
-            next_phase_candidate = ""
-
-            if board_type_just_set == "main": # The board that just got stalemated was main
-                secondary_outcome_field = "secondary_board_outcome"
-                if game_doc[secondary_outcome_field] == "active":
-                    if is_stalemate(game_doc["secondaryBoard"], current_player_color):
-                        game_doc[secondary_outcome_field] = "draw_stalemate"
-                        next_player_candidate = opponent_color
-                        next_phase_candidate = "main"
-                    else:
-                        next_player_candidate = current_player_color
-                        next_phase_candidate = "secondary"
-                else: # Secondary board already resolved
-                    next_player_candidate = opponent_color
-                    next_phase_candidate = "main"
-            else: # The board that just got stalemated was secondary
-                next_player_candidate = opponent_color
-                next_phase_candidate = "main"
-            
-            game_doc["turn"] = next_player_candidate
-            game_doc["active_board_phase"] = next_phase_candidate
-            # Fall through to the loop below to ensure the new phase is playable
-
-    # Loop to handle if the *new* player/phase is on a resolved board (applies after scenario load or immediate stalemate adjustment)
-    # This is copied & adapted from the on_move handler
-    for i in range(3): 
-        new_turn_player = game_doc["turn"]
-        new_active_phase = game_doc["active_board_phase"]
-        
-        current_board_key = "mainBoard" if new_active_phase == "main" else "secondaryBoard"
-        current_board_outcome_key = "main_board_outcome" if new_active_phase == "main" else "secondary_board_outcome"
-        
-        alternate_phase = "secondary" if new_active_phase == "main" else "main"
-        alternate_board_key = "mainBoard" if alternate_phase == "main" else "secondaryBoard"
-        alternate_board_outcome_key = "main_board_outcome" if alternate_phase == "main" else "secondary_board_outcome"
-
-        if game_doc[current_board_outcome_key] != "active": 
-            if game_doc[alternate_board_outcome_key] != "active": 
-                break 
-            elif is_stalemate(game_doc[alternate_board_key], new_turn_player):
-                game_doc[alternate_board_outcome_key] = "draw_stalemate" 
-                break 
-            else:
-                game_doc["active_board_phase"] = alternate_phase 
-                break 
-        else: 
-            if is_stalemate(game_doc[current_board_key], new_turn_player):
-                game_doc[current_board_outcome_key] = "draw_stalemate" 
-                if game_doc[alternate_board_outcome_key] != "active": 
-                    break 
-                elif is_stalemate(game_doc[alternate_board_key], new_turn_player):
-                    game_doc[alternate_board_outcome_key] = "draw_stalemate" 
-                    break 
-                else:
-                    game_doc["active_board_phase"] = alternate_phase 
-                    break 
-            else: 
-                break 
-
-    # Final check for game over if not already set by scenario (e.g., due to double stalemate)
-    if not game_doc["game_over"]:
-        m_outcome = game_doc["main_board_outcome"]
-        s_outcome = game_doc["secondary_board_outcome"]
-        if (m_outcome == "white_wins" and (s_outcome == "white_wins" or s_outcome == "draw_stalemate" or s_outcome == "active")) or \
-           (s_outcome == "white_wins" and (m_outcome == "white_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
-            if not (m_outcome == "black_wins" or s_outcome == "black_wins"): game_doc["winner"] = "White"
-        elif (m_outcome == "black_wins" and (s_outcome == "black_wins" or s_outcome == "draw_stalemate" or s_outcome == "active")) or \
-             (s_outcome == "black_wins" and (m_outcome == "black_wins" or m_outcome == "draw_stalemate" or m_outcome == "active")):
-            if not (m_outcome == "white_wins" or s_outcome == "white_wins"): game_doc["winner"] = "Black"
-        elif m_outcome == "draw_stalemate" and s_outcome == "draw_stalemate":
-            game_doc["winner"] = "Draw"
-        
-        if game_doc.get("winner"):
-            game_doc["game_over"] = True
-            game_doc["status"] = f"Game over. Winner: {game_doc['winner']}."
-            if game_doc["winner"] == "Draw": game_doc["status"] = "Game over. Draw."
-
-    # Fields to explicitly update in the database document
-    fields_to_set_in_db = {
-        "mainBoard": game_doc["mainBoard"],
-        "secondaryBoard": game_doc["secondaryBoard"],
-        "turn": game_doc["turn"],
-        "active_board_phase": game_doc["active_board_phase"],
-        "main_board_outcome": game_doc["main_board_outcome"],
-        "secondary_board_outcome": game_doc["secondary_board_outcome"],
-        "game_over": game_doc["game_over"],
-        "winner": game_doc["winner"],
-        "status": game_doc["status"],
-        "moves": game_doc["moves"], # Ensure moves are also updated/kept
-        "is_responding_to_check_on_board": game_doc["is_responding_to_check_on_board"]
-    }
-
-    games_collection.update_one(
-        {"_id": game["_id"]},
-        {"$set": fields_to_set_in_db}
-    )
-
-    # Emit the potentially modified game_doc (which includes all fields for serialization)
-    socketio.emit("game_update", serialize_game_state(game_doc), room=room)
-    print(f"DEBUG: Activated scenario {scenario_name} for room {room}. Final state emitted: turn {game_doc['turn']}, phase {game_doc['active_board_phase']}, main_o {game_doc['main_board_outcome']}, sec_o {game_doc['secondary_board_outcome']}")
-    return jsonify({"message": f"Scenario '{scenario_name}' activated successfully."}), 200
 
 ######################### SOCKETS #########################
 
@@ -952,6 +517,9 @@ def on_join(data):
             if isinstance(lobby.get("createdAt"), datetime.datetime):
                 lobby["createdAt"] = int(lobby["createdAt"].timestamp() * 1000)
         socketio.emit("lobby_list", lobbies)
+
+        # leima aktiiviseksi
+        _touch_player(game_state["_id"], username)
     except Exception as e:
         logger.error(f"Error joining game: {str(e)}")
         emit("error", {"message": "Failed to join game"})
@@ -975,6 +543,9 @@ def on_chat_message(data):
             "message": message
         }, room=room)
         logger.info(f"Chat message from {sender} in room {room}: {message}")
+
+        # leima aktiiviseksi
+        _touch_player(games_collection.find_one({"room": room})["_id"], sender)
     except Exception as e:
         logger.error(f"Error handling chat message: {str(e)}")
         emit("error", {"message": "Failed to send chat message"})
@@ -1025,6 +596,7 @@ def on_leave_room(data):
                             "checkmate_board": game_state.get("checkmate_board"),
                             "moves": game_state.get("moves", []),
                             "status": "completed",
+                            "status_message": f"{game_state.get('winner')} wins by {game_state.get('end_reason')}",
                             "end_reason": game_state.get("end_reason"),
                             "main_board_outcome": game_state.get("main_board_outcome"),
                             "secondary_board_outcome": game_state.get("secondary_board_outcome")
@@ -1117,6 +689,16 @@ def on_get_lobbies():
         logger.error(f"Error getting lobbies: {str(e)}")
         emit("error", {"message": "Failed to get lobbies"})
 
+def validate_room_code(room_id: str) -> bool:
+    """
+    Validate room code format:
+    - Max length of 30 characters
+    - No special characters (only alphanumeric)
+    """
+    if not room_id or len(room_id) > 30:
+        return False
+    return room_id.isalnum()
+
 @socketio.on("create_lobby")
 def on_create_lobby(data):
     try:
@@ -1127,6 +709,12 @@ def on_create_lobby(data):
         if not room_id or not host:
             logger.error("Invalid create_lobby data received")
             emit("error", {"message": "Invalid lobby data"})
+            return
+
+        # Validate room code format
+        if not validate_room_code(room_id):
+            logger.error(f"Invalid room code format: {room_id}")
+            emit("error", {"message": "Room code must be alphanumeric and max 30 characters"})
             return
 
         # Generate a unique game ID
@@ -1179,6 +767,7 @@ def on_create_lobby(data):
             "moves": [],
             "winner": None,
             "status": "ongoing",
+            "status_message": "",
             "main_board_outcome": "active",
             "secondary_board_outcome": "active",
             "game_over": False,
@@ -1221,7 +810,6 @@ def on_reset(data):
     room = data.get("room")
 
     if not room:
-        print("No room provided for reset")
         return
 
     try:
@@ -1235,7 +823,6 @@ def on_reset(data):
         })
         
         if not existing_game:
-            print(f"Game {room} not found")
             return
 
         # Generate a new game ID
@@ -1258,6 +845,7 @@ def on_reset(data):
             "moves": [],
             "winner": None,
             "status": "ongoing",
+            "status_message": "",
             "main_board_outcome": "active",
             "secondary_board_outcome": "active",
             "game_over": False,
@@ -1277,7 +865,6 @@ def on_reset(data):
 
         # Emit the new game state
         socketio.emit("game_reset", serialize_game_state(game_state), room=room)
-        print(f"Game {room} reset successfully with new ID {new_game_id}")
     except Exception as e:
         logger.error(f"Error resetting game: {str(e)}")
         emit("error", {"message": "Failed to reset game"})
@@ -1292,6 +879,14 @@ def on_move(data):
     if not room or not board_type_played or not move_details:
         emit("move_error", {"message": "Invalid move data received."})
         return
+
+    # leima aktiiviseksi tämän socket-ID:n perusteella
+    active_username = next(
+        (u for u, s in games_collection
+            .find_one({"room": room})
+            .get("socket_ids", {}).items() if s == request.sid), None)
+    if active_username:
+        _touch_player(games_collection.find_one({"room": room})["_id"], active_username)
 
     # Only look for ongoing games
     game_doc_cursor = games_collection.find_one({
@@ -1373,9 +968,6 @@ def on_move(data):
         uci_move = chess.Move(from_sq, to_sq, promotion=promo_type)
 
     # ---------- legality ----------
-    logger.debug(f"Received move: {move_details} for {current_player_color} on {board_type_played}")
-    logger.debug(f"Board FEN before move: {board.fen()}")
-    logger.debug(f"Constructed uci_move: {uci_move.uci()} (promotion: {promotion})")
     if uci_move not in board.legal_moves:
         logger.error(f"Illegal move attempted: {uci_move.uci()} on FEN {board.fen()}")
         return emit("move_error", {"message": "Illegal move (python-chess)."})
@@ -1397,7 +989,6 @@ def on_move(data):
 
     # Apply the move
     board.push(uci_move)
-    logger.debug(f"Board FEN after move: {board.fen()}")
 
     # Add current position to history
     current_fen = board.fen()
@@ -1423,6 +1014,7 @@ def on_move(data):
                 "checkmate_board": None,  # No checkmate board for draws
                 "moves": game_doc["moves"],
                 "status": "completed",
+                "status_message": "Game over. Draw by threefold repetition on both boards.",
                 "end_reason": "repetition",
                 "main_board_outcome": game_doc["main_board_outcome"],
                 "secondary_board_outcome": game_doc["secondary_board_outcome"]
@@ -1472,21 +1064,19 @@ def on_move(data):
             to_c = to_sq % 8
             captured_piece = prev_board_arr[to_r][to_c]
             if captured_piece:
-                print(f"[DEBUG] Found captured piece {captured_piece} at ({to_r}, {to_c})")
                 found = False
                 for r in range(8):
                     for c in range(8):
                         if game_doc["secondaryBoard"][r][c] == captured_piece:
-                            print(f"[DEBUG] Removing piece {captured_piece} from secondary board at ({r}, {c})")
                             game_doc["secondaryBoard"][r][c] = None
                             found = True
                             break
                     if found:
                         break
                 if not found:
-                    print(f"[DEBUG] Warning: Could not find piece {captured_piece} on secondary board")
+                    pass  # Silently continue if piece not found
             else:
-                print(f"[DEBUG] No captured piece found at (row={to_r}, col={to_c}) on main board.")
+                pass  # Silently continue if no captured piece
     elif board_type_played == "secondary":
         # En-passant: remove the *same-ID* pawn on the other board
         if is_ep_capture:
@@ -1504,6 +1094,9 @@ def on_move(data):
                     else:
                         continue
                     break
+            else:
+                # No captured piece on secondary board
+                pass
 
     # --- Promotion Fix: ensure correct promotion argument ---
     # (already handled by UCI move construction above, but ensure frontend sends correct char)
@@ -1518,6 +1111,7 @@ def on_move(data):
         game_doc["game_over"] = True
         game_doc["winner"] = current_player_color
         game_doc["status"] = f"{current_player_color} wins by checkmate on {board_type_played} board."
+        game_doc["status_message"] = f"{current_player_color} wins by checkmate on {board_type_played} board."
         
         # Save the completed game
         completed_game_data = {
@@ -1526,6 +1120,7 @@ def on_move(data):
             "checkmate_board": board_type_played,  # Add which board the checkmate occurred on
             "moves": game_doc["moves"],
             "status": "completed",
+            "status_message": f"{current_player_color} wins by checkmate on {board_type_played} board.",
             "end_reason": "checkmate",
             "main_board_outcome": game_doc["main_board_outcome"],
             "secondary_board_outcome": game_doc["secondary_board_outcome"]
@@ -1547,7 +1142,8 @@ def on_move(data):
             game_doc[board_played_outcome_field] = f"{current_player_color.lower()}_wins"
             game_doc["game_over"] = True
             game_doc["winner"] = current_player_color
-            game_doc["status"] = f"{current_player_color} wins by checkmate on {board_type_played} board (after escaping check)."
+            game_doc["status"] = "completed"
+            game_doc["status_message"] = f"{current_player_color} wins by checkmate on {board_type_played} board (after escaping check)."
         update_doc = {k: v for k, v in game_doc.items() if k != '_id'}
         games_collection.update_one({"_id": game_doc["_id"]}, {"$set": update_doc})
         socketio.emit("game_update", serialize_game_state(game_doc), room=room)
@@ -1558,7 +1154,7 @@ def on_move(data):
         game_doc["turn"] = opponent_color
         game_doc["active_board_phase"] = board_type_played
         game_doc["is_responding_to_check_on_board"] = board_type_played
-        game_doc["status"] = f"{opponent_color} is in check on {board_type_played} board."
+        game_doc["status_message"] = f"{opponent_color} is in check on {board_type_played} board."
         update_doc = {k: v for k, v in game_doc.items() if k != '_id'}
         games_collection.update_one({"_id": game_doc["_id"]}, {"$set": update_doc})
         socketio.emit("game_update", serialize_game_state(game_doc), room=room)
@@ -1568,14 +1164,16 @@ def on_move(data):
     if is_stalemate(board_played_state, opponent_color):
         if game_doc[board_played_outcome_field] == "active":
             game_doc[board_played_outcome_field] = "draw_stalemate"
-            game_doc["status"] = f"Stalemate on {board_type_played} board for {opponent_color}."
+            game_doc["status"] = "draw"
+            game_doc["status_message"] = "Game over. Draw by stalemate on both boards."
             
             # Check if both boards are now drawn
             if (game_doc["main_board_outcome"] == "draw_stalemate" and 
                 game_doc["secondary_board_outcome"] == "draw_stalemate"):
                 game_doc["game_over"] = True
                 game_doc["winner"] = "Draw"
-                game_doc["status"] = "Game over. Draw by stalemate on both boards."
+                game_doc["status"] = "draw"
+                game_doc["status_message"] = "Game over. Draw by stalemate on both boards."
                 
                 # Save the completed game
                 completed_game_data = {
@@ -1583,7 +1181,8 @@ def on_move(data):
                     "winner": "Draw",
                     "checkmate_board": None,  # No checkmate board for draws
                     "moves": game_doc["moves"],
-                    "status": "completed",
+                    "status": "draw",
+                    "status_message": "Draw recorded (threefold repetition)",
                     "end_reason": "stalemate",
                     "main_board_outcome": game_doc["main_board_outcome"],
                     "secondary_board_outcome": game_doc["secondary_board_outcome"]
@@ -1668,8 +1267,10 @@ def on_move(data):
     if game_doc.get("winner") and not game_doc.get("game_over"):
         game_doc["game_over"] = True
         game_doc["status"] = f"Game over. Winner: {game_doc['winner']}."
+        game_doc["status_message"] = f"Game over. Winner: {game_doc['winner']}."
         if game_doc["winner"] == "Draw":
-            game_doc["status"] = "Game over. Draw."
+            game_doc["status"] = "draw"
+            game_doc["status_message"] = "Game over. Draw."
     
     # Create a copy of game_doc without the _id field for the update
     update_doc = {k: v for k, v in game_doc.items() if k != '_id'}
@@ -1686,7 +1287,6 @@ def on_finish_game(data):
     moves = data.get("moves")
 
     if not room or not winner or not board or not moves:
-        print("Invalid finish_game data:", data)
         return
 
     completed_game_data = {
@@ -1695,6 +1295,7 @@ def on_finish_game(data):
         "board": board,
         "moves": moves,
         "status": "completed",
+        "status_message": f"{winner} wins by {moves[-1].split(': ')[1]}",
     }
     games_collection.insert_one(completed_game_data)
 
@@ -1705,6 +1306,7 @@ def on_finish_game(data):
         "turn": "White",
         "moves": [],
         "status": "ongoing",
+        "status_message": "",
     }
     games_collection.update_one(
         {"room": room},
@@ -1713,88 +1315,58 @@ def on_finish_game(data):
     )
 
     socketio.emit("game_reset", reset_game_state, room=room)
-    print(f"Game finished for room {room} and state reset for a new game.")
 
 ######################### MAIN EXECUTION #########################
 
 def cleanup_stale_rooms():
-    """Clean up rooms that have been empty for too long"""
+    """Armonaika-tietoinen siivous.
+       • Jos yksi pelaaja poissa > GRACE_SECONDS → forfeit-voitto toiselle  
+       • Jos kaikki poissa > GRACE_SECONDS → huone poistetaan"""
     try:
-        # On startup, clear all *multi-player* active rooms
-        if not hasattr(cleanup_stale_rooms, 'initialized'):
-            result = games_collection.delete_many({
-                "status": "ongoing",
-                "room": {"$not": {"$regex": f"^{LOCAL_ROOM_PREFIX}"}},
-                "$or": [
-                    {"players": {"$exists": False}},
-                    {"players": []},
-                    {"players": None},
-                    {"players.0": {"$exists": False}},
-                    {"socket_ids": {"$exists": False}},
-                    {"socket_ids": {}}
-                ]
-            })
-            if result.deleted_count > 0:
-                logger.info(f"Cleared all {result.deleted_count} stale multi-player rooms on startup")
-            cleanup_stale_rooms.initialized = True
-            return
+        now = datetime.datetime.utcnow()
+        deadline = now - datetime.timedelta(seconds=GRACE_SECONDS)
 
-        # Regular cleanup: find rooms that are truly stale
-        stale_time = datetime.datetime.utcnow() - datetime.timedelta(minutes=5)  # Increased to 5 minutes
-        result = games_collection.delete_many({
-            "status": "ongoing",
-            "room": {"$not": {"$regex": f"^{LOCAL_ROOM_PREFIX}"}},   # Skip local games
-            "$or": [
-                # Only delete if ALL of these conditions are met:
-                {
-                    "$and": [
-                        {"game_over": True},
-                        {"createdAt": {"$lt": stale_time}}
-                    ]
-                },
-                # Or if the room is completely empty
-                {
-                    "$and": [
-                        {"players": {"$exists": False}},
-                        {"createdAt": {"$lt": stale_time}}
-                    ]
-                },
-                {
-                    "$and": [
-                        {"players": []},
-                        {"createdAt": {"$lt": stale_time}}
-                    ]
-                },
-                {
-                    "$and": [
-                        {"players": None},
-                        {"createdAt": {"$lt": stale_time}}
-                    ]
-                },
-                {
-                    "$and": [
-                        {"players.0": {"$exists": False}},
-                        {"createdAt": {"$lt": stale_time}}
-                    ]
-                },
-                {
-                    "$and": [
-                        {"socket_ids": {"$exists": False}},
-                        {"createdAt": {"$lt": stale_time}}
-                    ]
-                },
-                {
-                    "$and": [
-                        {"socket_ids": {}},
-                        {"createdAt": {"$lt": stale_time}}
-                    ]
-                }
-            ]
-        })
-        if result.deleted_count > 0:
-            logger.info(f"Cleaned up {result.deleted_count} stale multi-player rooms")
+        # Poista "disconnected_at" niiltä jotka jo palasivat
+        games_collection.update_many(
+            {"disconnected_at": {"$exists": True}},
+            {"$pull": {"disconnected_at": {"$gt": deadline}}}
+        )
+
+        for g in games_collection.find(
+            {"status": "ongoing", "game_over": False,
+             "disconnected_at": {"$exists": True}}
+        ):
+            long_gone = [p for p, t in g["disconnected_at"].items() if t and t < deadline]
+            if not long_gone:
+                continue
+
+            alive = [p for p in g["players"] if p not in long_gone]
+
+            if alive:
+                winner = alive[0]
+                games_collection.update_one(
+                    {"_id": g["_id"]},
+                    {"$set": {"game_over": True,
+                              "status": "Opponent disconnected - forfeit",
+                              "winner": winner,
+                              "status_message": f"Opponent disconnected - forfeit: {winner}"}}
+                )
+                socketio.emit(
+                    "game_update",
+                    serialize_game_state(
+                        {**g, "game_over": True,
+                         "status": "Opponent disconnected - forfeit",
+                         "winner": winner,
+                         "status_message": f"Opponent disconnected - forfeit: {winner}"}
+                    ),
+                    room=g["room"]
+                )
+            else:
+                games_collection.delete_one({"_id": g["_id"]})
+                socketio.emit("room_deleted", {"room": g["room"]})
+
     except Exception as e:
-        logger.error(f"Error cleaning up stale rooms: {str(e)}")
+        logger.error(f"cleanup error: {e}")
 
 # Add cleanup call to the main execution block
 if __name__ == "__main__":
@@ -1804,8 +1376,21 @@ if __name__ == "__main__":
     scheduler = BackgroundScheduler()
     scheduler.add_job(cleanup_stale_rooms, 'interval', seconds=30)  # Run cleanup every 30 seconds
     scheduler.start()
-    socketio.run(app, host="0.0.0.0", port=5001)
+    socketio.run(app, host="0.0.0.0", port=8080)
 
 @app.route("/api/health", methods=["GET"])
 def health_check():                    # docker-compose uses this
     return {"status": "ok"}, 200
+
+# --------------------------------------------------------------------
+# Päivitä pelaajan "viimeksi nähty" -leima aina kun hänestä kuullaan
+# --------------------------------------------------------------------
+def _touch_player(game_id: str, username: str) -> None:
+    """Merkkaa käyttäjä aktiiviseksi ja nollaa mahdollinen disconnected_at"""
+    games_collection.update_one(
+        {"_id": game_id},
+        {"$set": {
+            f"last_seen.{username}": datetime.datetime.utcnow(),
+            f"disconnected_at.{username}": None          # tyhjennä jos oli
+        }}
+    )
