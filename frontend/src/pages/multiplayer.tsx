@@ -32,8 +32,8 @@ export default function MultiplayerSetup() {
       setRoomError("Room code must be 30 characters or less");
       return false;
     }
-    if (!/^[a-zA-Z0-9]+$/.test(code)) {
-      setRoomError("Room code can only contain letters and numbers");
+    if (!/^[a-zA-Z0-9_]+$/.test(code)) {
+      setRoomError("Room code can only contain letters, numbers, and underscores");
       return false;
     }
     setRoomError("");

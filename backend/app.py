@@ -693,11 +693,11 @@ def validate_room_code(room_id: str) -> bool:
     """
     Validate room code format:
     - Max length of 30 characters
-    - No special characters (only alphanumeric)
+    - Only alphanumeric characters and underscores allowed
     """
     if not room_id or len(room_id) > 30:
         return False
-    return room_id.isalnum()
+    return all(c.isalnum() or c == '_' for c in room_id)
 
 @socketio.on("create_lobby")
 def on_create_lobby(data):
